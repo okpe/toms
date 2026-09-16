@@ -694,7 +694,9 @@
       const endIndex = Math.min(startIndex + pageSize, totalUsers);
       const pageData = filteredUsersList.slice(startIndex, endIndex);
 
-      tbody.innerHTML = pageData.map(user => `
+      tbody.innerHTML = pageData.map(user => {
+        const isProtectedSuperAdmin = user.email === 'superadmin@helpdesk.local' || user.role === 'super_admin';
+        return `
         <tr>
           <td>#${user.id}</td>
           <td>
@@ -713,13 +715,13 @@
           </td>
           <td>${user.manager_name ? escapeHtml(user.manager_name) : '-'}</td>
           <td>
-            ${user.role === 'super_admin' 
-              ? `<button class="btn-edit" disabled title="Super Admin account cannot be edited">Edit</button>` 
+            ${isProtectedSuperAdmin 
+              ? `<button class="btn-edit" disabled title="Super Admin account is protected and cannot be edited">Protected</button>` 
               : `<button class="btn-edit" onclick="openEditModal(${user.id})">Edit</button>`
             }
           </td>
         </tr>
-      `).join('');
+      `}).join('');
 
       document.getElementById('paginationSummary').textContent = `Showing ${startIndex + 1}–${endIndex} of ${totalUsers} users`;
       document.getElementById('pageIndicator').textContent = `Page ${currentPage} of ${totalPages}`;
@@ -765,8 +767,8 @@
       const user = rawUsersList.find(u => u.id === userId);
       if (!user) return;
 
-      if (user.role === 'super_admin') {
-        showPageAlert('Super Admin account cannot be edited.', 'danger');
+      if (user.email === 'superadmin@helpdesk.local' || user.role === 'super_admin') {
+        showPageAlert('The primary Super Admin account is protected and cannot be edited.', 'danger');
         return;
       }
 
