@@ -1,61 +1,53 @@
-const sqlite3 = require('sqlite3').verbose();
+require('dotenv').config();
+const { createClient } = require('@libsql/client');
 const bcrypt = require('bcryptjs');
-const path = require('path');
 
-const dbPath = path.join(__dirname, 'helpdesk.db');
-const db = new sqlite3.Database(dbPath);
+// Initialize Turso Client (Uses cloud Turso DB in production, local file in development)
+const client = createClient({
+  url: process.env.TURSO_DATABASE_URL || 'file:helpdesk.db',
+  authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+});
 
 /* ==========================================================================
-   PROMISE-BASED HELPER WRAPPERS
+   PROMISE-BASED HELPER WRAPPERS FOR TURSO (@libsql/client)
    ========================================================================== */
 
-db.getAsync = function (sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
-};
+const db = {
+  // Executes SELECT queries expecting a single row
+  async getAsync(sql, params = []) {
+    const res = await client.execute({ sql, args: params });
+    return res.rows.length > 0 ? res.rows[0] : null;
+  },
 
-db.runAsync = function (sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ id: this.lastID, changes: this.changes });
-    });
-  });
-};
+  // Executes INSERT, UPDATE, DELETE queries
+  async runAsync(sql, params = []) {
+    const res = await client.execute({ sql, args: params });
+    return {
+      id: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : null,
+      changes: res.rowsAffected
+    };
+  },
 
-db.allAsync = function (sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-};
+  // Executes SELECT queries returning an array of row objects
+  async allAsync(sql, params = []) {
+    const res = await client.execute({ sql, args: params });
+    return res.rows;
+  },
 
-db.closeAsync = function () {
-  return new Promise((resolve, reject) => {
-    db.close((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+  // Dummy close method for backwards compatibility
+  async closeAsync() {
+    return Promise.resolve();
+  }
 };
-
-// Enable foreign key support
-db.run('PRAGMA foreign_keys = ON');
 
 /* ==========================================================================
    SCHEMA INITIALIZATION & SEEDING
    ========================================================================== */
 
-function initSchema() {
-  db.serialize(() => {
+async function initSchema() {
+  try {
     // 1. Users table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -67,6 +59,7 @@ function initSchema() {
         department TEXT,
         access_helpdesk INTEGER DEFAULT 1,
         access_assets INTEGER DEFAULT 1,
+        must_change_password INTEGER DEFAULT 1,
         reset_token_hash TEXT,
         reset_token_expires DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -75,17 +68,17 @@ function initSchema() {
     `);
 
     // 2. System state table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS system_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
     `);
 
-    db.run(`INSERT OR IGNORE INTO system_state (key, value) VALUES ('accepting_tickets', 'true')`);
+    await db.runAsync(`INSERT OR IGNORE INTO system_state (key, value) VALUES ('accepting_tickets', 'true')`);
 
     // 3. Tickets table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticket_number TEXT UNIQUE,
@@ -124,7 +117,7 @@ function initSchema() {
     `);
 
     // 4. Ticket history table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS ticket_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticket_id INTEGER NOT NULL,
@@ -138,7 +131,7 @@ function initSchema() {
     `);
 
     // 5. Assets table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS assets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         asset_tag TEXT UNIQUE NOT NULL,
@@ -162,7 +155,7 @@ function initSchema() {
     `);
 
     // 6. Asset repair logs table
-    db.run(`
+    await db.runAsync(`
       CREATE TABLE IF NOT EXISTS asset_repair_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         asset_id INTEGER NOT NULL,
@@ -177,93 +170,106 @@ function initSchema() {
       )
     `);
 
+    // 7. User security questions table
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS user_security_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER UNIQUE NOT NULL,
+        question_1 TEXT NOT NULL,
+        answer_1_hash TEXT NOT NULL,
+        question_2 TEXT NOT NULL,
+        answer_2_hash TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
     // Performance Indexes
-    db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_requester ON tickets(requester_id)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_to)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_assets_assigned ON assets(assigned_to)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_requester ON tickets(requester_id)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_to)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_assets_assigned ON assets(assigned_to)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_security_questions_user ON user_security_questions(user_id)`);
 
     // Safe Column Migrations
-    const safeAddColumn = (table, column, typeDef) => {
-      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`, (err) => {
-        if (err && !/duplicate column/i.test(err.message)) {
+    const safeAddColumn = async (table, column, typeDef) => {
+      try {
+        await db.runAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
+      } catch (err) {
+        if (!/duplicate column/i.test(err.message)) {
           console.error(`[!] Error adding ${column} to ${table}:`, err.message);
         }
-      });
+      }
     };
 
-    safeAddColumn('users', 'access_helpdesk', 'INTEGER DEFAULT 1');
-    safeAddColumn('users', 'access_assets', 'INTEGER DEFAULT 1');
-    safeAddColumn('users', 'subsidiary', 'TEXT');
-    safeAddColumn('users', 'department', 'TEXT');
+    await safeAddColumn('users', 'access_helpdesk', 'INTEGER DEFAULT 1');
+    await safeAddColumn('users', 'access_assets', 'INTEGER DEFAULT 1');
+    await safeAddColumn('users', 'must_change_password', 'INTEGER DEFAULT 1');
+    await safeAddColumn('users', 'subsidiary', 'TEXT');
+    await safeAddColumn('users', 'department', 'TEXT');
 
-    safeAddColumn('tickets', 'subsidiary', 'TEXT');
-    safeAddColumn('tickets', 'department', 'TEXT');
-    safeAddColumn('tickets', 'asset_id', 'INTEGER REFERENCES assets(id)');
-    safeAddColumn('tickets', 'quantity', 'INTEGER DEFAULT 1');
-    safeAddColumn('tickets', 'cost', 'REAL DEFAULT 0');
-    safeAddColumn('tickets', 'po_number', 'TEXT');
-    safeAddColumn('tickets', 'vendor', 'TEXT');
-    safeAddColumn('tickets', 'location', 'TEXT');
+    await safeAddColumn('tickets', 'subsidiary', 'TEXT');
+    await safeAddColumn('tickets', 'department', 'TEXT');
+    await safeAddColumn('tickets', 'asset_id', 'INTEGER REFERENCES assets(id)');
+    await safeAddColumn('tickets', 'quantity', 'INTEGER DEFAULT 1');
+    await safeAddColumn('tickets', 'cost', 'REAL DEFAULT 0');
+    await safeAddColumn('tickets', 'po_number', 'TEXT');
+    await safeAddColumn('tickets', 'vendor', 'TEXT');
+    await safeAddColumn('tickets', 'location', 'TEXT');
 
-    safeAddColumn('assets', 'cost', 'REAL DEFAULT 0');
-    safeAddColumn('assets', 'salvage_value', 'REAL DEFAULT 0');
-    safeAddColumn('assets', 'po_number', 'TEXT');
-    safeAddColumn('assets', 'vendor', 'TEXT');
-    safeAddColumn('assets', 'location', 'TEXT');
-    safeAddColumn('assets', 'last_repair_date', 'DATE');
-    safeAddColumn('assets', 'refreshed_at', 'DATETIME');
+    await safeAddColumn('assets', 'cost', 'REAL DEFAULT 0');
+    await safeAddColumn('assets', 'salvage_value', 'REAL DEFAULT 0');
+    await safeAddColumn('assets', 'po_number', 'TEXT');
+    await safeAddColumn('assets', 'vendor', 'TEXT');
+    await safeAddColumn('assets', 'location', 'TEXT');
+    await safeAddColumn('assets', 'last_repair_date', 'DATE');
+    await safeAddColumn('assets', 'refreshed_at', 'DATETIME');
 
-    migrateLegacyResolvers();
-    seedSuperAdminUser();
-  });
+    await db.runAsync(`UPDATE users SET must_change_password = 1 WHERE must_change_password IS NULL AND role != 'super_admin'`);
+
+    await migrateLegacyResolvers();
+    await seedSuperAdminUser();
+  } catch (err) {
+    console.error('Schema initialization error:', err);
+  }
 }
 
-function migrateLegacyResolvers() {
-  db.run(
-    `UPDATE users SET role = 'admin', access_helpdesk = 1 WHERE LOWER(role) = 'resolver'`,
-    function (err) {
-      if (err) {
-        console.error('[-] Error migrating legacy resolver roles:', err.message);
-      } else if (this.changes > 0) {
-        console.log(`[+] Migrated ${this.changes} legacy resolver account(s) to admin.`);
-      }
+async function migrateLegacyResolvers() {
+  try {
+    const res = await db.runAsync(`UPDATE users SET role = 'admin', access_helpdesk = 1 WHERE LOWER(role) = 'resolver'`);
+    if (res.changes > 0) {
+      console.log(`[+] Migrated ${res.changes} legacy resolver account(s) to admin.`);
     }
-  );
+  } catch (err) {
+    console.error('[-] Error migrating legacy resolver roles:', err.message);
+  }
 }
 
-function seedSuperAdminUser() {
+async function seedSuperAdminUser() {
   const defaultEmail = 'superadmin@helpdesk.local';
   const defaultPassword = 'SuperAdmin123!';
   const hashedPassword = bcrypt.hashSync(defaultPassword, 10);
 
-  db.get('SELECT id FROM users WHERE LOWER(email) = ?', [defaultEmail], (err, row) => {
-    if (err) {
-      console.error('Error querying database:', err);
-      return;
-    }
+  try {
+    const row = await db.getAsync('SELECT id FROM users WHERE LOWER(email) = ?', [defaultEmail]);
 
     if (!row) {
-      db.run(
-        `INSERT INTO users (name, email, password, role, access_helpdesk, access_assets, subsidiary, department) VALUES (?, ?, ?, 'super_admin', 1, 1, 'Arkland Group', 'IT')`,
-        ['Super Admin', defaultEmail, hashedPassword],
-        (insertErr) => {
-          if (insertErr) {
-            console.error('[-] Failed to seed Super Admin:', insertErr.message);
-          } else {
-            console.log('[+] Super Admin seeded: superadmin@helpdesk.local / SuperAdmin123!');
-          }
-        }
+      await db.runAsync(
+        `INSERT INTO users (name, email, password, role, access_helpdesk, access_assets, must_change_password, subsidiary, department) VALUES (?, ?, ?, 'super_admin', 1, 1, 0, 'Arkland Group', 'IT')`,
+        ['Super Admin', defaultEmail, hashedPassword]
       );
+      console.log('[+] Super Admin seeded: superadmin@helpdesk.local / SuperAdmin123!');
     } else {
-      db.run(
-        `UPDATE users SET password = ?, role = 'super_admin', access_helpdesk = 1, access_assets = 1 WHERE id = ?`,
-        [hashedPassword, row.id],
-        () => console.log('[+] Super Admin account verified & credentials updated.')
+      await db.runAsync(
+        `UPDATE users SET password = ?, role = 'super_admin', access_helpdesk = 1, access_assets = 1, must_change_password = 0 WHERE id = ?`,
+        [hashedPassword, row.id]
       );
+      console.log('[+] Super Admin account verified & credentials updated.');
     }
-  });
+  } catch (err) {
+    console.error('[-] Failed to seed/verify Super Admin:', err.message);
+  }
 }
 
 initSchema();
@@ -289,9 +295,97 @@ db.findUserByResetToken = async function (tokenHash) {
 
 db.updateUserPasswordAndClearToken = async function (userId, hashedPassword) {
   return await db.runAsync(
-    'UPDATE users SET password = ?, reset_token_hash = NULL, reset_token_expires = NULL WHERE id = ?',
+    'UPDATE users SET password = ?, must_change_password = 0, reset_token_hash = NULL, reset_token_expires = NULL WHERE id = ?',
     [hashedPassword, userId]
   );
+};
+
+db.updateUserPasswordAndClearFlag = async function (userId, hashedPassword) {
+  return await db.runAsync(
+    'UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?',
+    [hashedPassword, userId]
+  );
+};
+
+db.updateUserPassword = async function (userId, hashedPassword) {
+  return await db.runAsync(
+    'UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?',
+    [hashedPassword, userId]
+  );
+};
+
+db.clearMustChangePasswordFlag = async function (userId) {
+  return await db.runAsync(
+    'UPDATE users SET must_change_password = 0 WHERE id = ?',
+    [userId]
+  );
+};
+
+/* ==========================================================================
+   SECURITY QUESTION HELPER FUNCTIONS
+   ========================================================================== */
+
+db.getSecurityQuestionsByUserId = async function (userId) {
+  const sql = `
+    SELECT question_1, question_2 
+    FROM user_security_questions 
+    WHERE user_id = ?
+  `;
+  return await db.getAsync(sql, [userId]);
+};
+
+db.getUserSecurityQuestions = async function (userId) {
+  const record = await db.getAsync(
+    'SELECT question_1, question_2 FROM user_security_questions WHERE user_id = ?',
+    [userId]
+  );
+  if (!record) return [];
+  return [
+    { id: 1, question: record.question_1 },
+    { id: 2, question: record.question_2 }
+  ];
+};
+
+db.saveUserSecurityQuestions = async function (userId, questionsArray) {
+  if (!Array.isArray(questionsArray) || questionsArray.length < 2) {
+    throw new Error('Two security questions are required');
+  }
+
+  const q1 = questionsArray[0].question;
+  const a1Hash = questionsArray[0].answerHash;
+  const q2 = questionsArray[1].question;
+  const a2Hash = questionsArray[1].answerHash;
+
+  const sql = `
+    INSERT INTO user_security_questions (user_id, question_1, answer_1_hash, question_2, answer_2_hash)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      question_1 = excluded.question_1,
+      answer_1_hash = excluded.answer_1_hash,
+      question_2 = excluded.question_2,
+      answer_2_hash = excluded.answer_2_hash
+  `;
+  return await db.runAsync(sql, [userId, q1, a1Hash, q2, a2Hash]);
+};
+
+db.setSecurityQuestions = async function (userId, q1, a1Raw, q2, a2Raw) {
+  const a1Hash = await bcrypt.hash(a1Raw.toLowerCase().trim(), 10);
+  const a2Hash = await bcrypt.hash(a2Raw.toLowerCase().trim(), 10);
+
+  return await db.saveUserSecurityQuestions(userId, [
+    { question: q1, answerHash: a1Hash },
+    { question: q2, answerHash: a2Hash }
+  ]);
+};
+
+db.verifySecurityAnswers = async function (userId, a1Raw, a2Raw) {
+  const record = await db.getAsync('SELECT * FROM user_security_questions WHERE user_id = ?', [userId]);
+  if (!record) return false;
+
+  const valid1 = await bcrypt.compare(a1Raw.toLowerCase().trim(), record.answer_1_hash);
+  const valid2 = await bcrypt.compare(a2Raw.toLowerCase().trim(), record.answer_2_hash);
+
+  return valid1 && valid2;
 };
 
 /* ==========================================================================
@@ -300,7 +394,7 @@ db.updateUserPasswordAndClearToken = async function (userId, hashedPassword) {
 
 db.getUsers = async function () {
   const sql = `
-    SELECT u.id, u.name, u.email, u.role, u.manager_id, u.subsidiary, u.department, u.access_helpdesk, u.access_assets, u.created_at,
+    SELECT u.id, u.name, u.email, u.role, u.manager_id, u.subsidiary, u.department, u.access_helpdesk, u.access_assets, u.must_change_password, u.created_at,
            m.name AS manager_name
     FROM users u
     LEFT JOIN users m ON u.manager_id = m.id
@@ -311,13 +405,33 @@ db.getUsers = async function () {
 
 db.getUserById = async function (id) {
   const sql = `
-    SELECT u.id, u.name, u.email, u.role, u.manager_id, u.subsidiary, u.department, u.access_helpdesk, u.access_assets, u.created_at,
+    SELECT u.id, u.name, u.email, u.role, u.manager_id, u.subsidiary, u.department, u.access_helpdesk, u.access_assets, u.must_change_password, u.created_at,
            m.name AS manager_name
     FROM users u
     LEFT JOIN users m ON u.manager_id = m.id
     WHERE u.id = ?
   `;
   return await db.getAsync(sql, [id]);
+};
+
+db.createUser = async function ({ name, email, password, role = 'requester', manager_id = null, subsidiary = null, department = null }) {
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const sql = `
+    INSERT INTO users (
+      name, email, password, role, manager_id, subsidiary, department, 
+      access_helpdesk, access_assets, must_change_password
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 1)
+  `;
+  return await db.runAsync(sql, [
+    name, 
+    email.toLowerCase().trim(), 
+    hashedPassword, 
+    role, 
+    manager_id, 
+    subsidiary, 
+    department
+  ]);
 };
 
 /* ==========================================================================

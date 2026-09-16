@@ -59,12 +59,9 @@
   <nav class="navbar navbar-expand-lg navbar-dark shadow-sm">
     <div class="container-fluid">
       <div class="d-flex align-items-center gap-4">
-        <a class="navbar-brand m-0" href="#">ITSM Portal</a>
-        <div class="nav-links">
-          <a href="admin-users.html" class="nav-link-custom">User Management</a>
-          <a href="resolver-dashboard.html" class="nav-link-custom">Helpdesk</a>
-          <a href="asset-management.html" class="nav-link-custom active">Asset Management</a>
-          <a href="reports.html" class="nav-link-custom">Reports</a>
+        <a class="navbar-brand m-0" href="asset-management.html">ITSM Portal</a>
+        <div class="nav-links" id="navLinks">
+          <!-- Dynamically populated based on role -->
         </div>
       </div>
       <div class="d-flex align-items-center ms-auto">
@@ -202,7 +199,7 @@
 
               <!-- Enterprise Purchase Details -->
               <div class="col-md-4">
-               <label for="purchasePrice" class="form-label fw-semibold">Purchase Price (₦)</label>
+                <label for="purchasePrice" class="form-label fw-semibold">Purchase Price (₦)</label>
                 <input type="number" step="0.01" id="purchasePrice" name="purchasePrice" class="form-control" placeholder="1299.99">
               </div>
               <div class="col-md-4">
@@ -311,7 +308,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <!-- Authentication Guard Script -->
-  <script src="/auth-guard.js"></script>
+  <script src="auth-guard.js"></script>
 
   <script>
     let assetModalInstance;
@@ -339,6 +336,7 @@
 
     function showAlert(message, type = 'danger') {
       const alertContainer = document.getElementById('alertContainer');
+      if (!alertContainer) return;
       alertContainer.innerHTML = `
         <div class="alert alert-${type} alert-dismissible fade show" role="alert">
           ${escapeHTML(message)}
@@ -358,12 +356,36 @@
       return `<span class="badge ${cls}">${escapeHTML(status)}</span>`;
     }
 
+    function renderNavLinks(role) {
+      const navContainer = document.getElementById('navLinks');
+      if (!navContainer) return;
+      const normalizedRole = (role || '').toLowerCase();
+      let html = '';
+
+      if (['admin', 'super_admin', 'superadmin'].includes(normalizedRole)) {
+        html += `<a href="admin-users.html" class="nav-link-custom">User Management</a>`;
+      }
+      if (['admin', 'super_admin', 'superadmin', 'resolver', 'helpdesk'].includes(normalizedRole)) {
+        html += `<a href="resolver-dashboard.html" class="nav-link-custom">Helpdesk</a>`;
+      }
+      html += `<a href="asset-management.html" class="nav-link-custom active">Asset Management</a>`;
+      if (['admin', 'super_admin', 'superadmin', 'manager'].includes(normalizedRole)) {
+        html += `<a href="reports.html" class="nav-link-custom">Reports</a>`;
+      }
+
+      navContainer.innerHTML = html;
+    }
+
     document.addEventListener('DOMContentLoaded', async () => {
       // 1. Authenticate user before performing page setup
-      const user = await protectPage(['admin', 'super_admin', 'superadmin', 'asset_manager']);
+      let user = null;
+      if (typeof protectPage === 'function') {
+        user = await protectPage(['admin', 'super_admin', 'superadmin', 'asset_manager']);
+      }
       if (!user) return; // Exit execution if unauthorized
 
-      // 2. Populate navbar user detail
+      // 2. Setup navigation links and navbar user detail
+      renderNavLinks(user.role);
       const userInfoEl = document.getElementById('userInfo');
       if (userInfoEl && user.name) {
         userInfoEl.innerText = `${user.name} (${user.role || 'User'})`;
@@ -373,13 +395,13 @@
       assetModalInstance = new bootstrap.Modal(document.getElementById('assetModal'));
       assetHistoryModalInstance = new bootstrap.Modal(document.getElementById('assetHistoryModal'));
       
-      document.getElementById('openAddModalBtn').addEventListener('click', resetAndOpenModal);
-      document.getElementById('logoutBtn').addEventListener('click', handleLogout);
-      document.getElementById('assetForm').addEventListener('submit', handleFormSubmit);
+      document.getElementById('openAddModalBtn')?.addEventListener('click', resetAndOpenModal);
+      document.getElementById('logoutBtn')?.addEventListener('click', handleLogout);
+      document.getElementById('assetForm')?.addEventListener('submit', handleFormSubmit);
 
       // Enterprise Action Buttons inside History Modal
-      document.getElementById('btnReturnStock').addEventListener('click', handleReturnToStock);
-      document.getElementById('btnQuickReassign').addEventListener('click', () => {
+      document.getElementById('btnReturnStock')?.addEventListener('click', handleReturnToStock);
+      document.getElementById('btnQuickReassign')?.addEventListener('click', () => {
         assetHistoryModalInstance.hide();
         openEditModal(currentSelectedAssetId);
       });
@@ -388,36 +410,42 @@
       const modalStatusSelect = document.getElementById('status');
       const modalAssignedToSelect = document.getElementById('assignedTo');
 
-      modalStatusSelect.addEventListener('change', (e) => {
-        if (e.target.value !== 'Assigned') {
-          modalAssignedToSelect.value = '';
-        }
-      });
+      if (modalStatusSelect && modalAssignedToSelect) {
+        modalStatusSelect.addEventListener('change', (e) => {
+          if (e.target.value !== 'Assigned') {
+            modalAssignedToSelect.value = '';
+          }
+        });
 
-      modalAssignedToSelect.addEventListener('change', (e) => {
-        if (e.target.value) {
-          modalStatusSelect.value = 'Assigned';
-        } else if (modalStatusSelect.value === 'Assigned') {
-          modalStatusSelect.value = 'In Stock';
-        }
-      });
+        modalAssignedToSelect.addEventListener('change', (e) => {
+          if (e.target.value) {
+            modalStatusSelect.value = 'Assigned';
+          } else if (modalStatusSelect.value === 'Assigned') {
+            modalStatusSelect.value = 'In Stock';
+          }
+        });
+      }
 
       const searchInput = document.getElementById('searchInput');
       const statusFilter = document.getElementById('statusFilter');
 
-      searchInput.addEventListener('input', debounce((e) => {
-        state.searchQuery = e.target.value.trim().toLowerCase();
-        state.currentPage = 1;
-        renderFilteredTable();
-      }, 300));
+      if (searchInput) {
+        searchInput.addEventListener('input', debounce((e) => {
+          state.searchQuery = e.target.value.trim().toLowerCase();
+          state.currentPage = 1;
+          renderFilteredTable();
+        }, 300));
+      }
 
-      statusFilter.addEventListener('change', (e) => {
-        state.statusFilter = e.target.value;
-        state.currentPage = 1;
-        renderFilteredTable();
-      });
+      if (statusFilter) {
+        statusFilter.addEventListener('change', (e) => {
+          state.statusFilter = e.target.value;
+          state.currentPage = 1;
+          renderFilteredTable();
+        });
+      }
 
-      document.getElementById('assetTableBody').addEventListener('click', (e) => {
+      document.getElementById('assetTableBody')?.addEventListener('click', (e) => {
         const editBtn = e.target.closest('.edit-asset-btn');
         const viewHistoryBtn = e.target.closest('.view-history-btn');
         if (editBtn) {
@@ -427,7 +455,7 @@
         }
       });
 
-      document.getElementById('paginationControls').addEventListener('click', (e) => {
+      document.getElementById('paginationControls')?.addEventListener('click', (e) => {
         const pageBtn = e.target.closest('.page-link');
         if (!pageBtn) return;
         e.preventDefault();
@@ -448,7 +476,8 @@
     async function loadAssets() {
       const tbody = document.getElementById('assetTableBody');
       try {
-        const res = await authFetch('/api/assets');
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFunc('/api/assets');
         if (!res) return;
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         
@@ -457,13 +486,15 @@
         rawAssets.forEach(a => globalAssetsMap.set(String(a.id), a));
         renderFilteredTable();
       } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">Failed to load assets.</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">Failed to load assets.</td></tr>';
         showAlert('Could not load hardware assets.', 'danger');
       }
     }
 
     function renderFilteredTable() {
       const tbody = document.getElementById('assetTableBody');
+      if (!tbody) return;
+
       const filtered = rawAssets.filter(asset => {
         const matchesStatus = !state.statusFilter || asset.status === state.statusFilter;
         const q = state.searchQuery;
@@ -517,6 +548,8 @@
       const summary = document.getElementById('paginationSummary');
       const controls = document.getElementById('paginationControls');
 
+      if (!summary || !controls) return;
+
       if (totalItems === 0) {
         summary.innerText = 'Showing 0 to 0 of 0 assets';
         controls.innerHTML = '';
@@ -534,10 +567,12 @@
 
     async function loadUsers() {
       try {
-        const res = await authFetch('/api/admin/users');
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFunc('/api/admin/users');
         if (!res || !res.ok) return;
         const users = await res.json();
         const select = document.getElementById('assignedTo');
+        if (!select) return;
         select.innerHTML = '<option value="">-- Unassigned --</option>' + 
           users.map(u => `<option value="${escapeHTML(String(u.id))}">${escapeHTML(u.name)} (${escapeHTML(u.role)})</option>`).join('');
       } catch (err) {
@@ -562,14 +597,19 @@
       document.getElementById('detailVendor').innerText = asset.vendor || 'N/A';
 
       const timeline = document.getElementById('historyTimeline');
-      timeline.innerHTML = '<li class="text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading history...</li>';
+      if (timeline) {
+        timeline.innerHTML = '<li class="text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading history...</li>';
+      }
 
       assetHistoryModalInstance.show();
 
       try {
-        const res = await authFetch(`/api/assets/${id}/history`);
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFunc(`/api/assets/${id}/history`);
         if (!res || !res.ok) throw new Error();
         const historyLogs = await res.json();
+
+        if (!timeline) return;
 
         if (historyLogs.length === 0) {
           timeline.innerHTML = '<li class="text-muted">No historical audit records found for this asset.</li>';
@@ -584,7 +624,9 @@
           </li>
         `).join('');
       } catch (err) {
-        timeline.innerHTML = '<li class="text-danger small">Could not load historical audit entries.</li>';
+        if (timeline) {
+          timeline.innerHTML = '<li class="text-danger small">Could not load historical audit entries.</li>';
+        }
       }
     }
 
@@ -593,8 +635,10 @@
       if (!confirm('Are you sure you want to retrieve this asset back to stock storage?')) return;
 
       try {
-        const res = await authFetch(`/api/assets/${currentSelectedAssetId}`, {
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFunc(`/api/assets/${currentSelectedAssetId}`, {
           method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'In Stock', assigned_to: null })
         });
         if (res && res.ok) {
@@ -622,8 +666,8 @@
       const saveBtn = document.getElementById('saveAssetBtn');
       const saveSpinner = document.getElementById('saveSpinner');
 
-      saveBtn.disabled = true;
-      saveSpinner.classList.remove('d-none');
+      if (saveBtn) saveBtn.disabled = true;
+      if (saveSpinner) saveSpinner.classList.remove('d-none');
 
       const payload = {
         asset_tag: document.getElementById('assetTag').value.trim(),
@@ -638,8 +682,10 @@
       };
 
       try {
-        const res = await authFetch(id ? `/api/assets/${id}` : '/api/assets', {
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFunc(id ? `/api/assets/${id}` : '/api/assets', {
           method: id ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
@@ -656,8 +702,8 @@
       } catch (err) {
         showAlert('Network error encountered.', 'danger');
       } finally {
-        saveBtn.disabled = false;
-        saveSpinner.classList.add('d-none');
+        if (saveBtn) saveBtn.disabled = false;
+        if (saveSpinner) saveSpinner.classList.add('d-none');
       }
     }
 
@@ -667,8 +713,11 @@
       document.getElementById('assetForm').classList.remove('was-validated');
       document.getElementById('modalTitle').innerText = 'Edit Hardware Asset';
       document.getElementById('assetId').value = asset.id;
-      document.getElementById('assetTag').value = asset.asset_tag;
-      document.getElementById('assetTag').disabled = true;
+      
+      const assetTagInput = document.getElementById('assetTag');
+      assetTagInput.value = asset.asset_tag;
+      assetTagInput.disabled = true;
+
       document.getElementById('category').value = asset.category || '';
       document.getElementById('model').value = asset.model || '';
       document.getElementById('serialNumber').value = asset.serial_number || '';
@@ -692,11 +741,14 @@
 
     async function handleLogout() {
       try {
-        await authFetch('/api/auth/logout', { method: 'POST' });
+        const fetchFunc = typeof authFetch === 'function' ? authFetch : fetch;
+        await fetchFunc('/api/auth/logout', { method: 'POST' });
+      } catch (err) {
+        console.warn('Logout endpoint failed, proceeding with client cleanup');
       } finally {
         localStorage.removeItem('token');
         localStorage.removeItem('jwt');
-        window.location.href = '/login.html';
+        window.location.href = 'login.html';
       }
     }
   </script>

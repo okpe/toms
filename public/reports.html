@@ -80,12 +80,12 @@
       <!-- Toggle between Helpdesk and Asset Management Reports -->
       <ul class="nav nav-pills bg-white p-1 rounded border shadow-sm" id="reportTabs" role="tablist">
         <li class="nav-item" role="presentation">
-          <button class="nav-link active" id="helpdesk-tab" data-bs-toggle="pill" data-bs-target="#helpdesk-pane" type="button" role="tab">
+          <button class="nav-link active" id="helpdesk-tab" data-bs-toggle="pill" data-bs-target="#helpdesk-pane" type="button" role="tab" aria-controls="helpdesk-pane" aria-selected="true">
             <i class="bi bi-headset me-1"></i>Helpdesk Analytics
           </button>
         </li>
         <li class="nav-item" role="presentation">
-          <button class="nav-link" id="asset-tab" data-bs-toggle="pill" data-bs-target="#asset-pane" type="button" role="tab">
+          <button class="nav-link" id="asset-tab" data-bs-toggle="pill" data-bs-target="#asset-pane" type="button" role="tab" aria-controls="asset-pane" aria-selected="false">
             <i class="bi bi-laptop me-1"></i>Asset & Financial Analytics
           </button>
         </li>
@@ -193,7 +193,6 @@
           </div>
         </div>
       </div>
-
 
       <!-- ================= 2. ASSET & FINANCIAL ANALYTICS TAB ================= -->
       <div class="tab-pane fade" id="asset-pane" role="tabpanel" aria-labelledby="asset-tab">
@@ -396,6 +395,17 @@
       await loadAssetReportData();
     });
 
+    // Helper function to safely escape strings rendering into HTML
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     // Helper function to format local dates safely as YYYY-MM-DD
     function formatLocalDate(dateObj) {
       const year = dateObj.getFullYear();
@@ -479,12 +489,12 @@
 
       tbody.innerHTML = tickets.map(t => `
         <tr>
-          <td class="fw-bold">${t.ticket_number || t.id}</td>
+          <td class="fw-bold">${escapeHtml(t.ticket_number || t.id)}</td>
           <td>${t.created_at ? new Date(t.created_at).toLocaleDateString() : 'N/A'}</td>
-          <td>${t.requester_name || 'N/A'}</td>
-          <td>${t.category || 'General'}</td>
-          <td>${t.title || ''}</td>
-          <td><span class="badge ${t.status === 'Resolved' || t.status === 'Closed' ? 'bg-success' : 'bg-warning text-dark'}">${t.status}</span></td>
+          <td>${escapeHtml(t.requester_name || 'N/A')}</td>
+          <td>${escapeHtml(t.category || 'General')}</td>
+          <td>${escapeHtml(t.title || '')}</td>
+          <td><span class="badge ${t.status === 'Resolved' || t.status === 'Closed' ? 'bg-success' : 'bg-warning text-dark'}">${escapeHtml(t.status)}</span></td>
         </tr>
       `).join('');
     }
@@ -660,29 +670,29 @@
 
       tbody.innerHTML = assets.map(a => `
         <tr>
-          <td class="fw-bold text-primary">${a.asset_tag || a.id}</td>
+          <td class="fw-bold text-primary">${escapeHtml(a.asset_tag || a.id)}</td>
           <td>
-            <div class="fw-semibold">${a.category || 'N/A'}</div>
-            <div class="small text-muted">${a.model || ''}</div>
+            <div class="fw-semibold">${escapeHtml(a.category || 'N/A')}</div>
+            <div class="small text-muted">${escapeHtml(a.model || '')}</div>
           </td>
           <td>
-            <div class="fw-semibold text-dark">${a.vendor || 'N/A'}</div>
+            <div class="fw-semibold text-dark">${escapeHtml(a.vendor || 'N/A')}</div>
             <div class="small text-muted">${a.purchase_date ? new Date(a.purchase_date).toLocaleDateString() : 'N/A'}</div>
           </td>
           <td class="fw-bold">${formatCurrency(a.purchase_price || a.cost || 0)}</td>
           <td>
-            <div class="fw-semibold">${a.assigned_user_name || a.assigned_to || 'Unassigned'}</div>
-            <div class="small text-muted">${a.user_department || a.department || 'N/A'}</div>
+            <div class="fw-semibold">${escapeHtml(a.assigned_user_name || a.assigned_to || 'Unassigned')}</div>
+            <div class="small text-muted">${escapeHtml(a.user_department || a.department || 'N/A')}</div>
           </td>
           <td>
             <span class="badge ${
               a.status === 'Assigned' ? 'bg-success' : 
               a.status === 'In Stock' ? 'bg-info text-dark' : 
               a.status === 'Under Repair' ? 'bg-danger' : 'bg-secondary'
-            }">${a.status}</span>
+            }">${escapeHtml(a.status)}</span>
           </td>
           <td>
-            <button type="button" class="btn btn-outline-dark btn-sm" onclick="viewAuditLogs('${a.id || a.asset_tag}')">
+            <button type="button" class="btn btn-outline-dark btn-sm" onclick="viewAuditLogs('${escapeHtml(a.id || a.asset_tag)}')">
               <i class="bi bi-clock-history me-1"></i>Logs
             </button>
           </td>
@@ -697,7 +707,7 @@
       auditModalInstance.show();
 
       try {
-        const res = await authFetch(`/api/assets/${assetId}/history`);
+        const res = await authFetch(`/api/assets/${encodeURIComponent(assetId)}/history`);
         if (!res || !res.ok) throw new Error('Failed to load history');
         
         const logs = await res.json();
@@ -712,11 +722,11 @@
               ${logs.map(log => `
                 <li class="list-group-item px-0">
                   <div class="d-flex justify-content-between align-items-center">
-                    <span class="fw-bold text-primary">${log.action || 'Update'}</span>
+                    <span class="fw-bold text-primary">${escapeHtml(log.action || 'Update')}</span>
                     <small class="text-muted">${log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A'}</small>
                   </div>
-                  <div class="small text-dark mt-1">${log.notes || log.details || 'No additional details provided.'}</div>
-                  <div class="small text-muted mt-1">Performed by: ${log.performed_by || 'System'}</div>
+                  <div class="small text-dark mt-1">${escapeHtml(log.notes || log.details || 'No additional details provided.')}</div>
+                  <div class="small text-muted mt-1">Performed by: ${escapeHtml(log.performed_by || 'System')}</div>
                 </li>
               `).join('')}
             </ul>

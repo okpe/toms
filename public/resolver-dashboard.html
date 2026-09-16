@@ -46,10 +46,9 @@
     .nav-link-custom.active { background: #007bff; color: #fff; }
 
     /* KPI Summary Metrics */
-    /* KPI Summary Metrics - FIXED LAYOUT */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr); /* Enforces 4 equal columns */
+      grid-template-columns: repeat(4, 1fr);
       gap: 15px;
       margin-bottom: 25px;
     }
@@ -68,7 +67,7 @@
       display: flex;
       flex-direction: column;
       justify-content: center;
-      min-height: 90px; /* Ensures consistent card height */
+      min-height: 90px;
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -91,6 +90,7 @@
       line-height: 1; 
       color: #1a252f;
     }
+
     /* Interactive Controls Toolbar */
     .table-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; width: 100%; margin-bottom: 15px; }
     .search-box { flex: 1; min-width: 240px; }
@@ -118,6 +118,7 @@
     .badge-approved, .badge-open { background: #cce5ff; color: #004085; }
     .badge-in-progress { background: #ffe8cc; color: #d97706; }
     .badge-resolved { background: #d4edda; color: #155724; }
+    .badge-closed { background: #e2e3e5; color: #383d41; }
 
     /* SLA Status Styles */
     .sla-met { color: #28a745; font-weight: bold; font-size: 0.85rem; }
@@ -137,13 +138,19 @@
     .btn-page { padding: 5px 12px; border: 1px solid #ced4da; background: #fff; border-radius: 4px; cursor: pointer; font-weight: 600; }
     .btn-page:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    /* Resolution Modal Overlay */
+    /* Modal Overlays */
     .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; }
     .modal-content-custom { background: #ffffff; width: 100%; max-width: 500px; padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
     .modal-header-custom { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px; }
     .modal-footer-custom { display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; }
     textarea.form-control-custom { width: 100%; height: 110px; padding: 10px; border: 1px solid #ced4da; border-radius: 4px; font-family: inherit; margin-top: 8px; font-size: 0.9rem; outline: none; }
     textarea.form-control-custom:focus { border-color: var(--primary); }
+
+    /* Password Requirements Styling */
+    .pwd-req-list { list-style: none; padding-left: 0; font-size: 0.8rem; margin-top: 8px; margin-bottom: 12px; }
+    .pwd-req-item { color: #dc3545; transition: color 0.2s; }
+    .pwd-req-item.valid { color: #28a745; }
+    .alert-banner { display: none; padding: 10px 12px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 12px; }
   </style>
 </head>
 <body class="d-flex flex-column min-vh-100">
@@ -209,6 +216,7 @@
             <option value="Approved">Approved / Open</option>
             <option value="In Progress">In Progress</option>
             <option value="Resolved">Resolved</option>
+            <option value="Closed">Closed</option>
           </select>
         </div>
         <div class="filter-box">
@@ -252,7 +260,7 @@
     </div>
   </main>
 
-  <!-- Resolution Modal -->
+  <!-- Ticket Resolution Modal -->
   <div id="resolveModal" class="modal-overlay">
     <div class="modal-content-custom">
       <div class="modal-header-custom">
@@ -269,6 +277,85 @@
         <div class="modal-footer-custom">
           <button type="button" class="btn-page" onclick="closeModal()">Cancel</button>
           <button type="submit" id="submitResolveBtn" class="btn-action btn-resolve" disabled>Submit Resolution</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Mandatory Password Change Modal -->
+  <div id="changePasswordModal" class="modal-overlay">
+    <div class="modal-content-custom">
+      <div class="modal-header-custom">
+        <h2 class="h5 mb-0 fw-bold text-danger">Password Update Required</h2>
+      </div>
+      <div id="pwdAlert" class="alert-banner"></div>
+      <form id="changePasswordForm" onsubmit="handlePasswordChangeSubmit(event)">
+        <div class="mb-3">
+          <label for="currentPassword" class="form-label small fw-bold">Current Password</label>
+          <input type="password" id="currentPassword" class="form-control form-control-sm" required>
+        </div>
+        <div class="mb-3">
+          <label for="newPassword" class="form-label small fw-bold">New Password</label>
+          <input type="password" id="newPassword" class="form-control form-control-sm" oninput="validatePasswordRequirements()" required>
+        </div>
+        <div class="mb-3">
+          <label for="confirmPassword" class="form-label small fw-bold">Confirm New Password</label>
+          <input type="password" id="confirmPassword" class="form-control form-control-sm" oninput="validatePasswordRequirements()" required>
+          <small id="matchError" class="text-danger" style="display:none; font-size: 0.75rem;">Passwords do not match.</small>
+        </div>
+
+        <ul class="pwd-req-list">
+          <li id="reqLength" class="pwd-req-item">✖ At least 8 characters long</li>
+          <li id="reqUpper" class="pwd-req-item">✖ Includes uppercase letter (A-Z)</li>
+          <li id="reqLower" class="pwd-req-item">✖ Includes lowercase letter (a-z)</li>
+          <li id="reqNumber" class="pwd-req-item">✖ Includes a number (0-9)</li>
+          <li id="reqSpecial" class="pwd-req-item">✖ Includes special character (!@#$%^&*)</li>
+        </ul>
+
+        <div class="modal-footer-custom">
+          <button type="submit" id="btnUpdatePassword" class="btn-action btn-resolve" disabled>Update Password</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Security Questions Setup Modal -->
+  <div id="setupSecurityQuestionsModal" class="modal-overlay">
+    <div class="modal-content-custom">
+      <div class="modal-header-custom">
+        <h2 class="h5 mb-0 fw-bold text-primary">Setup Security Questions</h2>
+      </div>
+      <p class="text-muted small mb-3">Please configure two security questions for self-service password recovery.</p>
+      <div id="secSetupAlert" class="alert-banner"></div>
+      <form id="secSetupForm" onsubmit="handleSecurityQuestionsSubmit(event)">
+        <div class="mb-2">
+          <label class="form-label small fw-bold">Security Question 1</label>
+          <select id="setupQ1" class="form-select form-select-sm" required>
+            <option value="">Select a Question...</option>
+            <option value="What was the name of your first pet?">What was the name of your first pet?</option>
+            <option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
+            <option value="What was the name of your first school?">What was the name of your first school?</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <input type="text" id="setupA1" class="form-control form-control-sm" placeholder="Answer 1" required>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small fw-bold">Security Question 2</label>
+          <select id="setupQ2" class="form-select form-select-sm" required>
+            <option value="">Select a Question...</option>
+            <option value="In what city were you born?">In what city were you born?</option>
+            <option value="What is your favorite book?">What is your favorite book?</option>
+            <option value="What was the make of your first car?">What was the make of your first car?</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <input type="text" id="setupA2" class="form-control form-control-sm" placeholder="Answer 2" required>
+        </div>
+
+        <div class="modal-footer-custom">
+          <button type="submit" id="btnSaveSecQuestions" class="btn btn-primary btn-sm fw-bold">Save Security Questions</button>
         </div>
       </form>
     </div>
@@ -302,7 +389,15 @@
       }
 
       if (currentUser) {
+        // Enforce Login redirection if security setup or password change is required
+        if (currentUser.must_change_password || currentUser.mustChangePassword || currentUser.securityQuestionsSet === false) {
+          window.location.href = '/login.html';
+          return;
+        }
+
         document.getElementById('userInfo').innerText = `${currentUser.name} (${currentUser.role.replace('_', ' ').toUpperCase()})`;
+        checkMandatoryPasswordChange(currentUser);
+        await checkSecurityQuestionsStatus();
       } else {
         return;
       }
@@ -314,11 +409,18 @@
 
     async function loadFallbackUserSession() {
       try {
-        const res = await fetch('/api/auth/me');
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn('/api/auth/me');
         if (!res.ok) throw new Error('Not logged in');
-        const user = await res.json();
+        const data = await res.json();
+        const user = data.user || data;
         
         if (user && user.role && ['resolver', 'admin', 'super_admin'].includes(user.role.toLowerCase())) {
+          // Check security and password update requirement flags from backend
+          if (user.must_change_password || data.mustChangePassword || data.securityQuestionsSet === false || user.securityQuestionsSet === false) {
+            window.location.href = '/login.html';
+            return null;
+          }
           return user;
         }
         window.location.href = '/unauthorized.html';
@@ -332,7 +434,8 @@
     async function loadResolverTickets() {
       const tbody = document.getElementById('resolverTableBody');
       try {
-        const res = await fetch('/api/resolver/tickets');
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn('/api/resolver/tickets');
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
             window.location.href = '/login.html';
@@ -500,6 +603,9 @@
               ${normalizedStatus === 'RESOLVED' ? `
                 <span style="color:#155724; font-size:0.85rem; font-weight:600;">Resolved</span>
               ` : ''}
+              ${normalizedStatus === 'CLOSED' ? `
+                <span style="color:#6c757d; font-size:0.85rem; font-weight:600;">Closed</span>
+              ` : ''}
             </td>
           </tr>
         `;
@@ -517,7 +623,8 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
 
       try {
-        const res = await fetch(`/api/resolver/tickets/${id}/status`, {
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn(`/api/resolver/tickets/${id}/status`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: newStatus })
@@ -572,7 +679,8 @@
       submitBtn.textContent = 'Submitting...';
 
       try {
-        const res = await fetch(`/api/resolver/tickets/${ticketId}/status`, {
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn(`/api/resolver/tickets/${ticketId}/status`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: 'Resolved', resolution_notes: notes })
@@ -593,9 +701,179 @@
       }
     }
 
+    // --- Password Change Modal Handlers ---
+    function checkMandatoryPasswordChange(user) {
+      if (user && (user.must_change_password || user.mustChangePassword)) {
+        window.location.href = '/login.html';
+      }
+    }
+
+    function validatePasswordRequirements() {
+      const pwdInput = document.getElementById('newPassword');
+      const confirmPwdInput = document.getElementById('confirmPassword');
+      const submitBtn = document.getElementById('btnUpdatePassword');
+      const matchErrorEl = document.getElementById('matchError');
+
+      if (!pwdInput || !confirmPwdInput || !submitBtn) return false;
+
+      const pwd = pwdInput.value;
+      const confirmPwd = confirmPwdInput.value;
+
+      const hasLength = pwd.length >= 8;
+      const hasUpper = /[A-Z]/.test(pwd);
+      const hasLower = /[a-z]/.test(pwd);
+      const hasNumber = /[0-9]/.test(pwd);
+      const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(pwd);
+      const matches = pwd === confirmPwd && pwd !== '';
+
+      updateRequirementBadge('reqLength', hasLength, 'At least 8 characters long');
+      updateRequirementBadge('reqUpper', hasUpper, 'Includes uppercase letter (A-Z)');
+      updateRequirementBadge('reqLower', hasLower, 'Includes lowercase letter (a-z)');
+      updateRequirementBadge('reqNumber', hasNumber, 'Includes a number (0-9)');
+      updateRequirementBadge('reqSpecial', hasSpecial, 'Includes special character (!@#$%^&*)');
+
+      if (matchErrorEl) {
+        matchErrorEl.style.display = (confirmPwd && !matches) ? 'block' : 'none';
+      }
+
+      const isValid = hasLength && hasUpper && hasLower && hasNumber && hasSpecial && matches;
+      submitBtn.disabled = !isValid;
+
+      return isValid;
+    }
+
+    function updateRequirementBadge(elementId, isValid, labelText) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+
+      if (isValid) {
+        el.className = 'pwd-req-item valid';
+        el.innerText = `✔ ${labelText}`;
+      } else {
+        el.className = 'pwd-req-item';
+        el.innerText = `✖ ${labelText}`;
+      }
+    }
+
+    async function handlePasswordChangeSubmit(e) {
+      e.preventDefault();
+
+      if (!validatePasswordRequirements()) return;
+
+      const currentPassword = document.getElementById('currentPassword').value;
+      const newPassword = document.getElementById('newPassword').value;
+      const alertEl = document.getElementById('pwdAlert');
+      const submitBtn = document.getElementById('btnUpdatePassword');
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Updating...';
+
+      if (alertEl) {
+        alertEl.style.display = 'none';
+      }
+
+      try {
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn('/api/auth/change-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentPassword, newPassword })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          if (alertEl) {
+            alertEl.style.display = 'block';
+            alertEl.style.background = '#d4edda';
+            alertEl.style.color = '#155724';
+            alertEl.innerText = 'Password updated successfully! Redirecting...';
+          }
+
+          setTimeout(() => {
+            window.location.href = '/login.html';
+          }, 1500);
+        } else {
+          throw new Error(data.error || 'Failed to change password.');
+        }
+      } catch (err) {
+        if (alertEl) {
+          alertEl.style.display = 'block';
+          alertEl.style.background = '#f8d7da';
+          alertEl.style.color = '#721c24';
+          alertEl.innerText = err.message;
+        }
+        submitBtn.disabled = false;
+        submitBtn.innerText = 'Update Password';
+      }
+    }
+
+    // --- Security Questions Handlers ---
+    async function checkSecurityQuestionsStatus() {
+      try {
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn('/api/auth/security-questions/status');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.hasQuestions === false || data.securityQuestionsSet === false) {
+            window.location.href = '/login.html';
+          }
+        }
+      } catch (err) {
+        console.warn('Unable to verify security question setup status.');
+      }
+    }
+
+    async function handleSecurityQuestionsSubmit(e) {
+      e.preventDefault();
+      const question1 = document.getElementById('setupQ1').value;
+      const answer1 = document.getElementById('setupA1').value.trim();
+      const question2 = document.getElementById('setupQ2').value;
+      const answer2 = document.getElementById('setupA2').value.trim();
+      const alertEl = document.getElementById('secSetupAlert');
+
+      if (question1 === question2) {
+        alertEl.style.display = 'block';
+        alertEl.style.background = '#f8d7da';
+        alertEl.style.color = '#721c24';
+        alertEl.innerText = 'Please select two different security questions.';
+        return;
+      }
+
+      try {
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        const res = await fetchFn('/api/auth/security-questions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question1, answer1, question2, answer2 })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          alertEl.style.display = 'block';
+          alertEl.style.background = '#d4edda';
+          alertEl.style.color = '#155724';
+          alertEl.innerText = 'Security questions saved successfully!';
+
+          setTimeout(() => {
+            window.location.href = '/login.html';
+          }, 1500);
+        } else {
+          throw new Error(data.error || 'Failed to set security questions.');
+        }
+      } catch (err) {
+        alertEl.style.display = 'block';
+        alertEl.style.background = '#f8d7da';
+        alertEl.style.color = '#721c24';
+        alertEl.innerText = err.message;
+      }
+    }
+
     async function handleLogout() {
       try {
-        await fetch('/api/auth/logout', { method: 'POST' });
+        const fetchFn = typeof authFetch === 'function' ? authFetch : fetch;
+        await fetchFn('/api/auth/logout', { method: 'POST' });
       } catch (err) {
         console.warn('Logout API failed, redirecting...');
       } finally {

@@ -3,6 +3,7 @@ const session = require('express-session');
 const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const cron = require('node-cron');
 const db = require('./database');
 const authRoutes = require('./authRoutes');
@@ -128,7 +129,9 @@ const loginHandler = async (req, res) => {
 
     const normalizedRole = String(user.role || '').trim().toLowerCase();
     const isSuperOrAdmin = ['admin', 'super_admin', 'superadmin'].includes(normalizedRole);
+    const hasQuestions = user.security_questions_set === 1;
 
+    req.session.userId = user.id;
     req.session.user = {
       id: user.id,
       name: user.name,
@@ -137,7 +140,11 @@ const loginHandler = async (req, res) => {
       department: user.department || null,
       role: normalizedRole,
       access_helpdesk: isSuperOrAdmin ? 1 : (user.access_helpdesk ?? 1),
-      access_assets: isSuperOrAdmin ? 1 : (user.access_assets ?? 0)
+      access_assets: isSuperOrAdmin ? 1 : (user.access_assets ?? 0),
+      mustChangePassword: user.must_change_password === 1,
+      securityQuestionsSet: hasQuestions,
+      requireSecuritySetup: !hasQuestions,
+      has_security_questions: hasQuestions
     };
 
     req.session.save((err) => {
@@ -145,7 +152,21 @@ const loginHandler = async (req, res) => {
         console.error('[!] Session save failed during login:', err);
         return res.status(500).json({ error: 'Failed to save session' });
       }
-      res.json({ message: 'Login successful', user: req.session.user });
+
+      const mustChange = user.must_change_password === 1;
+
+      res.json({ 
+        success: true,
+        message: 'Login successful', 
+        user: req.session.user,
+        userId: user.id,
+        requiresFirstTimeSetup: mustChange,
+        mustChangePassword: mustChange,
+        must_change_password: mustChange,
+        securityQuestionsSet: hasQuestions,
+        requireSecuritySetup: !hasQuestions,
+        has_security_questions: hasQuestions
+      });
     });
   } catch (err) {
     console.error('[!] Login error:', err);
@@ -154,8 +175,249 @@ const loginHandler = async (req, res) => {
 };
 
 app.post('/api/login', loginHandler);
+app.post('/api/auth/login', loginHandler);
 
-// Consolidated Session Fetch Endpoint
+// First-Time Setup Route
+app.post('/api/auth/first-time-setup', async (req, res) => {
+  try {
+    const userId = req.session?.userId || req.session?.user?.id || req.body.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Session expired or invalid user ID.' });
+    }
+
+    const { new_password, question_1, answer_1, question_2, answer_2 } = req.body;
+
+    if (!new_password || !question_1 || !answer_1 || !question_2 || !answer_2) {
+      return res.status(400).json({ error: 'Please fill in all security questions and a new password.' });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(new_password, 10);
+
+    // Save security questions
+    await db.setSecurityQuestions(userId, question_1.trim(), answer_1.trim(), question_2.trim(), answer_2.trim());
+
+    // Update password and clear must_change_password flag
+    await db.updateUserPasswordAndClearFlag(userId, hashedNewPassword);
+
+    if (req.session.user) {
+      req.session.user.mustChangePassword = false;
+      req.session.user.securityQuestionsSet = true;
+      req.session.user.requireSecuritySetup = false;
+      req.session.user.has_security_questions = true;
+    }
+
+    res.json({ success: true, message: 'Account setup completed successfully!' });
+  } catch (err) {
+    console.error('Setup error:', err);
+    res.status(500).json({ error: 'Failed to complete setup.' });
+  }
+});
+
+// ================= SECURITY QUESTION & RECOVERY ENDPOINTS =================
+
+// Fetch Security Questions by Email Query (GET /api/auth/security-questions?email=...)
+app.get('/api/auth/security-questions', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: 'Email address is required.' });
+
+    const user = await db.findUserByEmail(email.trim());
+    if (!user) {
+      return res.status(404).json({ error: 'No account found with that email address. Please double-check your entry.' });
+    }
+
+    const sq = await db.getAsync('SELECT question_1, question_2 FROM user_security_questions WHERE user_id = ?', [user.id]);
+    if (!sq) {
+      return res.status(422).json({ 
+        error: 'Security questions have not been configured for this account. Please contact your System Administrator to receive a temporary password.' 
+      });
+    }
+
+    return res.status(200).json({ 
+      question_1: sq.question_1, 
+      question_2: sq.question_2,
+      question1: sq.question_1, 
+      question2: sq.question_2 
+    });
+  } catch (err) {
+    console.error('[!] Get security questions query error:', err);
+    return res.status(500).json({ error: 'An unexpected system error occurred. Please try again later.' });
+  }
+});
+
+// Fetch Security Questions by Email Body (POST /api/auth/get-security-questions)
+app.post('/api/auth/get-security-questions', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required.' });
+
+    const user = await db.findUserByEmail(email.trim());
+    if (!user) return res.status(404).json({ error: 'No account found with that email.' });
+
+    const sq = await db.getAsync('SELECT question_1, question_2 FROM user_security_questions WHERE user_id = ?', [user.id]);
+    if (!sq) {
+      return res.status(422).json({ 
+        error: 'Security questions have not been configured for this account. Please contact your System Administrator to receive a temporary password.' 
+      });
+    }
+
+    return res.status(200).json({ 
+      question_1: sq.question_1, 
+      question_2: sq.question_2,
+      question1: sq.question_1, 
+      question2: sq.question_2 
+    });
+  } catch (err) {
+    console.error('[!] Get security questions error:', err);
+    return res.status(500).json({ error: 'Failed to retrieve security questions.' });
+  }
+});
+
+// Setup Security Questions Handler
+const setupSecurityQuestionsHandler = async (req, res) => {
+  try {
+    const userId = req.session?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized session.' });
+    }
+
+    let q1 = req.body.question1;
+    let a1 = req.body.answer1;
+    let q2 = req.body.question2;
+    let a2 = req.body.answer2;
+
+    // Support array payload structure as fallback
+    if (Array.isArray(req.body.questions) && req.body.questions.length >= 2) {
+      q1 = q1 || req.body.questions[0].question;
+      a1 = a1 || req.body.questions[0].answer;
+      q2 = q2 || req.body.questions[1].question;
+      a2 = a2 || req.body.questions[1].answer;
+    }
+
+    if (!q1 || !a1 || !q2 || !a2) {
+      return res.status(400).json({ error: 'All security questions and answers are required.' });
+    }
+
+    const answer1Hash = await bcrypt.hash(a1.trim().toLowerCase(), 10);
+    const answer2Hash = await bcrypt.hash(a2.trim().toLowerCase(), 10);
+
+    // Update questions and user flag inside transaction
+    await db.runAsync('DELETE FROM user_security_questions WHERE user_id = ?', [userId]);
+    await db.runAsync(
+      `INSERT INTO user_security_questions (user_id, question_1, answer_1_hash, question_2, answer_2_hash) VALUES (?, ?, ?, ?, ?)`,
+      [userId, q1, answer1Hash, q2, answer2Hash]
+    );
+
+    await db.runAsync('UPDATE users SET security_questions_set = 1 WHERE id = ?', [userId]);
+    
+    req.session.user.securityQuestionsSet = true;
+    req.session.user.requireSecuritySetup = false;
+    req.session.user.has_security_questions = true;
+
+    req.session.save((err) => {
+      if (err) console.error('[!] Session save warning during setup security:', err);
+      return res.status(200).json({ success: true, message: 'Security questions configured successfully.' });
+    });
+  } catch (err) {
+    console.error('[!] Setup security questions error:', err);
+    return res.status(500).json({ error: 'Failed to save security questions.' });
+  }
+};
+
+app.post('/api/auth/setup-security-questions', requireAuth, setupSecurityQuestionsHandler);
+
+// Security Verification & Password Reset Handler
+const verifyAndResetPasswordHandler = async (req, res) => {
+  try {
+    const { email, answer1, answer2, newPassword } = req.body;
+
+    if (!email || !answer1 || !answer2 || !newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: 'All fields are required and new password must be at least 8 characters.' });
+    }
+
+    const user = await db.findUserByEmail(email.trim());
+    if (!user) return res.status(400).json({ error: 'Invalid reset request.' });
+
+    const sq = await db.getAsync('SELECT * FROM user_security_questions WHERE user_id = ?', [user.id]);
+    if (!sq) return res.status(400).json({ error: 'Security questions not set up for this account.' });
+
+    const match1 = await bcrypt.compare(answer1.trim().toLowerCase(), sq.answer_1_hash);
+    const match2 = await bcrypt.compare(answer2.trim().toLowerCase(), sq.answer_2_hash);
+
+    if (!match1 || !match2) {
+      return res.status(400).json({ error: 'Incorrect security question answers.' });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.runAsync('UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?', [newHash, user.id]);
+
+    return res.status(200).json({ success: true, message: 'Password reset successful.' });
+  } catch (err) {
+    console.error('[!] Verify and reset error:', err);
+    return res.status(500).json({ error: 'Failed to reset password.' });
+  }
+};
+
+app.post('/api/auth/reset-password-security', verifyAndResetPasswordHandler);
+app.post('/api/auth/verify-and-reset', verifyAndResetPasswordHandler);
+
+// Direct Password Reset Request Endpoint
+app.post('/api/auth/request-password-reset', async (req, res) => {
+  const { email, desiredPassword } = req.body;
+
+  if (!email || !desiredPassword || desiredPassword.length < 8) {
+    return res.status(400).json({ error: 'Valid email and desired password (min 8 characters) are required.' });
+  }
+
+  try {
+    const user = await db.findUserByEmail(email.trim());
+    if (!user) {
+      return res.status(404).json({ error: 'No account associated with that email address.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(desiredPassword, 10);
+    
+    await db.runAsync(
+      `UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?`,
+      [hashedPassword, user.id]
+    );
+
+    res.json({ message: 'Password reset successfully. You can now sign in with your new password.' });
+  } catch (err) {
+    console.error('[!] Password reset request error:', err);
+    res.status(500).json({ error: 'Failed to process password reset request.' });
+  }
+});
+
+// Authenticated Password Update Endpoint
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  const { newPassword } = req.body;
+  const userId = req.session.user.id;
+
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.runAsync(
+      `UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?`,
+      [hashedPassword, userId]
+    );
+
+    req.session.user.mustChangePassword = false;
+    req.session.save((err) => {
+      if (err) return res.status(500).json({ error: 'Failed to update session.' });
+      res.json({ message: 'Password updated successfully.' });
+    });
+  } catch (err) {
+    console.error('[!] Change password error:', err);
+    res.status(500).json({ error: 'Failed to update password.' });
+  }
+});
+
+// Session Verification Endpoint
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const userId = req.session?.user?.id;
@@ -165,7 +427,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     }
 
     const user = await db.getAsync(
-      'SELECT id, name, email, subsidiary, department, role, access_helpdesk, access_assets FROM users WHERE id = ?',
+      'SELECT id, name, email, subsidiary, department, role, access_helpdesk, access_assets, must_change_password, security_questions_set FROM users WHERE id = ?',
       [userId]
     );
 
@@ -176,6 +438,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
     const normalizedRole = String(user.role || '').trim().toLowerCase();
     const isSuperOrAdmin = ['admin', 'super_admin', 'superadmin'].includes(normalizedRole);
+    const hasQuestions = user.security_questions_set === 1;
 
     req.session.user = {
       id: user.id,
@@ -185,7 +448,11 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
       department: user.department || null,
       role: normalizedRole,
       access_helpdesk: isSuperOrAdmin ? 1 : (user.access_helpdesk ?? 1),
-      access_assets: isSuperOrAdmin ? 1 : (user.access_assets ?? 0)
+      access_assets: isSuperOrAdmin ? 1 : (user.access_assets ?? 0),
+      mustChangePassword: user.must_change_password === 1,
+      securityQuestionsSet: hasQuestions,
+      requireSecuritySetup: !hasQuestions,
+      has_security_questions: hasQuestions
     };
 
     req.session.save((err) => {
@@ -203,6 +470,11 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
         role: req.session.user.role,
         access_helpdesk: req.session.user.access_helpdesk,
         access_assets: req.session.user.access_assets,
+        mustChangePassword: req.session.user.mustChangePassword,
+        must_change_password: req.session.user.mustChangePassword,
+        securityQuestionsSet: req.session.user.securityQuestionsSet,
+        requireSecuritySetup: req.session.user.requireSecuritySetup,
+        has_security_questions: req.session.user.has_security_questions,
         user: req.session.user
       });
     });
@@ -212,7 +484,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   }
 });
 
-// Unified Logout Handler
+// Logout Handler
 app.all('/api/auth/logout', (req, res) => {
   if (req.session) {
     req.session.destroy((err) => {
@@ -228,6 +500,28 @@ app.all('/api/auth/logout', (req, res) => {
 });
 
 // ================= ADMIN USER MANAGEMENT ROUTES =================
+
+app.post('/api/admin/users/:id/reset-password', requireAuth, requireAdminOrSuper, async (req, res) => {
+  const userId = req.params.id;
+
+  try {
+    const targetUser = await db.getAsync('SELECT role FROM users WHERE id = ?', [userId]);
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    const tempPassword = 'Temp#' + crypto.randomBytes(4).toString('hex');
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    await db.runAsync(
+      `UPDATE users SET password = ?, must_change_password = 1 WHERE id = ?`,
+      [hashedPassword, userId]
+    );
+
+    res.json({ message: 'Password reset successfully', tempPassword });
+  } catch (err) {
+    console.error('[!] Admin password reset error:', err);
+    res.status(500).json({ error: 'Failed to reset user password' });
+  }
+});
 
 app.get('/api/admin/users', requireAuth, requireAdminOrSuper, async (req, res) => {
   try {
@@ -326,8 +620,8 @@ app.post('/api/admin/users', requireAuth, requireAdminOrSuper, async (req, res) 
     const allowAssets = (access_assets === true || access_assets === 1 || access_assets === '1') ? 1 : 0;
 
     const result = await db.runAsync(
-      `INSERT INTO users (name, email, password, subsidiary, department, role, manager_id, access_helpdesk, access_assets) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (name, email, password, subsidiary, department, role, manager_id, access_helpdesk, access_assets, must_change_password) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [name, email.toLowerCase().trim(), hashedPassword, subsidiary || null, department || null, newRole, mId, allowHelpdesk, allowAssets]
     );
 
@@ -358,10 +652,6 @@ app.put('/api/admin/users/:id', requireAuth, requireAdminOrSuper, async (req, re
       return res.status(403).json({ error: 'Super Administrator accounts are protected and cannot be edited' });
     }
 
-<<<<<<< HEAD
-=======
-    // Guard: Standard Admins cannot elevate anyone to admin/super_admin or alter an Admin account
->>>>>>> 8aeed2091482308e68a99fb53bf943c95c7c6f42
     if ((newRole === 'super_admin' || newRole === 'admin' || targetRole === 'admin') && sessionRole !== 'super_admin') {
       return res.status(403).json({ error: 'Only Super Admins can manage or assign Administrative roles' });
     }
@@ -437,12 +727,12 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdminOrSuper, async (req,
 app.post('/api/tickets', requireAuth, requireHelpdeskAccess, async (req, res) => {
   const { title, description, category, priority, ticket_type, subsidiary, department } = req.body;
   const userId = req.session.user.id;
+  const userRole = String(req.session.user.role || '').toLowerCase();
 
   if (!title || !description) {
     return res.status(400).json({ error: 'Title and description are required' });
   }
 
-  // Fall back to session user values if not provided in request body
   const finalSubsidiary = subsidiary || req.session.user.subsidiary || null;
   const finalDepartment = department || req.session.user.department || null;
 
@@ -450,6 +740,12 @@ app.post('/api/tickets', requireAuth, requireHelpdeskAccess, async (req, res) =>
   if (selectedType.includes('Incident')) selectedType = 'Incident';
   if (selectedType.includes('Service Request')) selectedType = 'Service Request';
   if (selectedType.includes('Change Request')) selectedType = 'Change Request';
+
+  // FIX: Validated status values ('Open' for standard users, 'Approved' for management/resolvers)
+  let initialStatus = 'Open';
+  if (['manager', 'admin', 'super_admin', 'superadmin', 'resolver'].includes(userRole)) {
+    initialStatus = 'Approved';
+  }
 
   const priorityHours = { Critical: 2, High: 4, Medium: 24, Low: 48 };
   const hoursToAdd = priorityHours[priority] || 24;
@@ -462,12 +758,12 @@ app.post('/api/tickets', requireAuth, requireHelpdeskAccess, async (req, res) =>
         ticket_type, title, description, category, priority, status, 
         requester_id, subsidiary, department, created_at, updated_at, sla_target_resolution
       )
-      VALUES (?, ?, ?, ?, ?, 'Open', ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const result = await db.runAsync(insertQuery, [
       selectedType, title, description, category || 'General Support',
-      priority || 'Medium', userId, finalSubsidiary, finalDepartment,
+      priority || 'Medium', initialStatus, userId, finalSubsidiary, finalDepartment,
       now.toISOString(), now.toISOString(), slaTargetResolution
     ]);
 
@@ -483,7 +779,7 @@ app.post('/api/tickets', requireAuth, requireHelpdeskAccess, async (req, res) =>
       [ticketNumber, ticketId]
     );
 
-    res.status(201).json({ message: 'Ticket created successfully', ticketId, ticketNumber });
+    res.status(201).json({ message: 'Ticket created successfully', ticketId, ticketNumber, status: initialStatus });
   } catch (err) {
     console.error('[!] Error inserting ticket:', err);
     res.status(500).json({ error: 'Failed to create ticket' });
@@ -615,10 +911,12 @@ app.get('/api/manager/tickets', requireAuth, requireManager, requireHelpdeskAcce
        FROM tickets t JOIN users u ON t.requester_id = u.id ORDER BY t.id DESC`
     : `SELECT t.id, t.ticket_number, t.ticket_type, t.title, t.description, t.category, t.priority, t.status, t.created_at, t.updated_at, t.requester_id,
               u.name as requester_name, u.email as requester_email
-       FROM tickets t JOIN users u ON t.requester_id = u.id WHERE u.manager_id = ? ORDER BY t.id DESC`;
+       FROM tickets t JOIN users u ON t.requester_id = u.id 
+       WHERE u.manager_id = ? OR t.requester_id = ? 
+       ORDER BY t.id DESC`;
 
   try {
-    const rows = await db.allAsync(query, isAdmin ? [] : [managerId]);
+    const rows = await db.allAsync(query, isAdmin ? [] : [managerId, managerId]);
     res.json(rows || []);
   } catch (err) {
     console.error('Error fetching manager tickets:', err);
@@ -650,12 +948,25 @@ app.put('/api/manager/tickets/:id/action', requireAuth, requireManager, requireH
 
 const getResolverTicketsHandler = async (req, res) => {
   try {
-    const rows = await db.allAsync(`
+    const { status } = req.query;
+    let sql = `
       SELECT t.id, t.ticket_number, t.ticket_type, t.title, t.description, t.category, t.priority, t.status, t.created_at, t.updated_at,
              t.sla_target_resolution, t.sla_resolution_status, u.name as requester_name, u.email as requester_email
       FROM tickets t JOIN users u ON t.requester_id = u.id
-      WHERE t.status IN ('Approved', 'In Progress', 'Resolved') ORDER BY t.id DESC
-    `);
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (status && status.toUpperCase() !== 'ALL') {
+      sql += ` AND t.status = ?`;
+      params.push(status);
+    } else if (!status) {
+      sql += ` AND t.status IN ('Approved', 'Open', 'In Progress', 'Resolved', 'Closed')`;
+    }
+
+    sql += ` ORDER BY t.id DESC`;
+
+    const rows = await db.allAsync(sql, params);
     res.json(rows || []);
   } catch (err) {
     console.error('Error fetching admin ticket queue:', err);
@@ -723,7 +1034,6 @@ app.get('/api/assets', requireAuth, requireAssetManager, requireAssetAccess, asy
   }
 });
 
-// SHARED CSV EXPORT LOGIC WITH FORMULA INJECTION PREVENTION
 const assetExportHandler = async (req, res) => {
   const { status, category } = req.query;
   let conditions = [];
@@ -765,7 +1075,6 @@ const assetExportHandler = async (req, res) => {
   }
 };
 
-// STATIC EXPORT ROUTES DECLARED BEFORE PARAMS
 app.get('/api/assets/export', requireAuth, requireAssetManager, requireAssetAccess, assetExportHandler);
 app.get('/api/assets/reports/export', requireAuth, requireAdminOrSuper, assetExportHandler);
 
@@ -791,7 +1100,6 @@ app.get('/api/assets/reports', requireAuth, requireAdminOrSuper, async (req, res
   }
 });
 
-// PARAMETERIZED ROUTES MUST COME AFTER SPECIFIC EXPORT PATHS
 app.get('/api/assets/:id', requireAuth, requireAssetManager, requireAssetAccess, async (req, res) => {
   try {
     const asset = await db.getAssetById(req.params.id);
@@ -1075,8 +1383,18 @@ cron.schedule('0 * * * *', async () => {
     console.error('[CRON] Error checking SLA breaches:', err);
   }
 });
-
+/*
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server started successfully on port ${PORT}`);
-});
+});*/
+
+// Only start the server locally if not running as a Vercel serverless function
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+module.exports = app;

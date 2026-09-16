@@ -8,7 +8,6 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     
     body {
-      /* Replace the URL below with your organization's background image */
       background: linear-gradient(rgba(15, 23, 42, 0.75), rgba(15, 23, 42, 0.75)), 
                   url('https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1920&q=80') center/cover no-repeat fixed;
       display: flex;
@@ -25,11 +24,11 @@
       border-radius: 12px;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
       width: 100%;
-      max-width: 420px;
+      max-width: 440px;
       text-align: center;
+      position: relative;
     }
 
-    /* Logo Container & Placeholder Styling */
     .logo-container {
       margin-bottom: 15px;
       display: flex;
@@ -37,14 +36,6 @@
       align-items: center;
     }
 
-    /* Standard Logo Image Class (use when you have an image URL/file) */
-    .brand-logo {
-      max-height: 50px;
-      width: auto;
-      object-fit: contain;
-    }
-
-    /* Placeholder CSS Logo Badge (active by default until replaced) */
     .logo-placeholder {
       width: 54px;
       height: 54px;
@@ -69,15 +60,16 @@
 
     .form-group { text-align: left; margin-bottom: 16px; }
     label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.85rem; color: #334155; }
-    input { 
+    input, select { 
       width: 100%; 
       padding: 11px 13px; 
       border: 1px solid #cbd5e1; 
       border-radius: 6px; 
       font-size: 0.95rem;
+      background-color: #ffffff;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
-    input:focus { outline: none; border-color: #0056b3; box-shadow: 0 0 0 3px rgba(0, 86, 179, 0.15); }
+    input:focus, select:focus { outline: none; border-color: #0056b3; box-shadow: 0 0 0 3px rgba(0, 86, 179, 0.15); }
 
     .form-options {
       display: flex;
@@ -109,32 +101,30 @@
     }
     .btn:hover { background: #004085; }
 
-    .credentials-hint { 
-      margin-top: 24px; 
-      padding-top: 16px; 
-      border-top: 1px solid #e2e8f0; 
-      font-size: 0.78rem; 
-      color: #64748b; 
-    }
-    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #0f172a; }
-
-    /* View View Visibility Controls */
     .view-step { display: none; }
     .view-step.active { display: block; }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .modal-overlay.active { display: flex; }
   </style>
 </head>
 <body>
 
   <div class="login-card">
     
-    <!-- BRAND LOGO PLACEHOLDER -->
+    <!-- BRAND LOGO -->
     <div class="logo-container">
-      <!-- DEFAULT PLACEHOLDER: Replace this entire div with your image tag when ready -->
       <div class="logo-placeholder" title="Company Logo Placeholder">IT</div>
-      
-      <!-- EXAMPLE IMAGE IMPLEMENTATION (Uncomment and replace src):
-      <img src="/assets/company-logo.png" alt="Company Logo" class="brand-logo">
-      -->
     </div>
 
     <!-- VIEW 1: SIGN IN FORM -->
@@ -147,12 +137,12 @@
       <form id="loginForm">
         <div class="form-group">
           <label for="email">Email Address</label>
-          <input type="email" id="email" required placeholder="name@company.com">
+          <input type="email" id="email" required placeholder="name@company.com" autocomplete="username">
         </div>
 
         <div class="form-group">
           <label for="password">Password</label>
-          <input type="password" id="password" required placeholder="••••••••">
+          <input type="password" id="password" required placeholder="••••••••" autocomplete="current-password">
         </div>
 
         <div class="form-options">
@@ -162,22 +152,57 @@
         <button type="submit" class="btn">Sign In</button>
       </form>
 
-        </div>
+      <!-- FIRST TIME SETUP CONTAINER -->
+      <div id="setupContainer" style="display: none; margin-top: 15px; text-align: left;">
+        <h2 style="font-size: 1.2rem; color: #1e293b; margin-bottom: 4px;">Account Initialization</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 12px;">Update your temporary password and set your security questions.</p>
 
-    <!-- VIEW 2: FORGOT PASSWORD REQUEST -->
+        <form id="firstTimeSetupForm">
+          <input type="hidden" id="setupUserId" />
+
+          <div class="form-group">
+            <label for="newPassword">New Password</label>
+            <input type="password" id="newPassword" required minlength="6" placeholder="Min 6 characters" />
+          </div>
+
+          <div class="form-group">
+            <label for="setupNewQ1">Security Question 1</label>
+            <input type="text" id="setupNewQ1" placeholder="e.g. First pet's name" required />
+          </div>
+          <div class="form-group">
+            <label for="setupA1">Answer 1</label>
+            <input type="password" id="setupA1" required />
+          </div>
+
+          <div class="form-group">
+            <label for="setupNewQ2">Security Question 2</label>
+            <input type="text" id="setupNewQ2" placeholder="e.g. City of birth" required />
+          </div>
+          <div class="form-group">
+            <label for="setupA2">Answer 2</label>
+            <input type="password" id="setupA2" required />
+          </div>
+
+          <button type="submit" class="btn">Save & Activate Account</button>
+          <div id="setupMessage" style="font-size: 13px; margin-top: 8px;"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- VIEW 2: FORGOT PASSWORD (EMAIL) -->
     <div id="forgotView" class="view-step">
       <h1>Reset Password</h1>
-      <p class="subtitle">Enter your email to receive a reset token</p>
+      <p class="subtitle">Enter your email to verify security questions</p>
 
       <div id="forgotAlert" class="alert"></div>
 
-      <form id="forgotForm">
+      <form id="fetchQuestionsForm">
         <div class="form-group">
           <label for="resetEmail">Email Address</label>
-          <input type="email" id="resetEmail" required placeholder="name@company.com">
+          <input type="email" id="resetEmail" required placeholder="name@company.com" autocomplete="email">
         </div>
 
-        <button type="submit" class="btn">Send Reset Request</button>
+        <button type="submit" class="btn">Continue</button>
       </form>
 
       <div style="margin-top: 18px;">
@@ -185,151 +210,130 @@
       </div>
     </div>
 
-    <!-- VIEW 3: SET NEW PASSWORD -->
-    <div id="resetView" class="view-step">
-      <h1>New Password</h1>
-      <p class="subtitle">Enter your token and set a new password</p>
+    <!-- VIEW 3: ANSWER SECURITY QUESTIONS & NEW PASSWORD -->
+    <div id="securityQuestionsView" class="view-step">
+      <h1>Security Verification</h1>
+      <p class="subtitle">Answer your security questions to reset your password</p>
 
-      <div id="resetAlert" class="alert"></div>
+      <div id="secAlert" class="alert"></div>
 
-      <form id="resetForm">
+      <form id="secResetForm">
         <div class="form-group">
-          <label for="resetToken">Reset Token</label>
-          <input type="text" id="resetToken" required placeholder="Enter token from email">
+          <label id="lblQ1">Security Question 1</label>
+          <input type="text" id="ans1" required placeholder="Your answer" autocomplete="off">
         </div>
 
         <div class="form-group">
-          <label for="newPassword">New Password</label>
-          <input type="password" id="newPassword" required placeholder="Min. 8 characters">
+          <label id="lblQ2">Security Question 2</label>
+          <input type="text" id="ans2" required placeholder="Your answer" autocomplete="off">
         </div>
 
-        <button type="submit" class="btn">Update Password</button>
+        <div class="form-group">
+          <label for="secNewPassword">New Password</label>
+          <input type="password" id="secNewPassword" required placeholder="Min. 8 characters" minlength="8" autocomplete="new-password">
+        </div>
+
+        <div class="form-group">
+          <label for="secConfirmPassword">Confirm New Password</label>
+          <input type="password" id="secConfirmPassword" required placeholder="Re-enter password" autocomplete="new-password">
+        </div>
+
+        <button type="submit" class="btn">Reset Password</button>
       </form>
 
       <div style="margin-top: 18px;">
-        <span class="link-action" onclick="switchView('loginView')">← Back to Sign In</span>
+        <span class="link-action" onclick="switchView('forgotView')">← Back</span>
       </div>
     </div>
 
   </div>
 
+  <!-- POP-UP MODAL 1: FORCED PASSWORD UPDATE -->
+  <div id="forcedPasswordModal" class="modal-overlay">
+    <div class="login-card" style="box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+      <h1>Password Update Required</h1>
+      <p class="subtitle">You are using a temporary password. Please set a new password to continue.</p>
+
+      <div id="forcedAlert" class="alert"></div>
+
+      <form id="forcedPasswordForm">
+        <div class="form-group">
+          <label for="forcedNewPassword">New Password</label>
+          <input type="password" id="forcedNewPassword" required placeholder="Min. 8 characters" minlength="8" autocomplete="new-password">
+        </div>
+
+        <div class="form-group">
+          <label for="forcedConfirmPassword">Confirm New Password</label>
+          <input type="password" id="forcedConfirmPassword" required placeholder="Re-enter password" autocomplete="new-password">
+        </div>
+
+        <button type="submit" class="btn">Update Password & Continue</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- POP-UP MODAL 2: FORCED SECURITY QUESTIONS SETUP -->
+  <div id="forcedSecurityModal" class="modal-overlay">
+    <div class="login-card" style="box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+      <h1>Security Setup Required</h1>
+      <p class="subtitle">Please configure your security questions to protect your account.</p>
+
+      <div id="forcedSecAlert" class="alert"></div>
+
+      <form id="forcedSecurityForm">
+        <div class="form-group">
+          <label for="setupQ1">Security Question 1</label>
+          <select id="setupQ1" required>
+            <option value="">Select a question...</option>
+            <option value="What was your first pet's name?">What was your first pet's name?</option>
+            <option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
+            <option value="What city were you born in?">What city were you born in?</option>
+          </select>
+          <input type="text" id="setupA1Modal" required placeholder="Your answer" style="margin-top: 8px;" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="setupQ2">Security Question 2</label>
+          <select id="setupQ2" required>
+            <option value="">Select a question...</option>
+            <option value="What was the model of your first car?">What was the model of your first car?</option>
+            <option value="What was the name of your elementary school?">What was the name of your elementary school?</option>
+            <option value="What is your favorite book?">What is your favorite book?</option>
+          </select>
+          <input type="text" id="setupA2Modal" required placeholder="Your answer" style="margin-top: 8px;" autocomplete="off">
+        </div>
+
+        <button type="submit" class="btn">Save & Continue</button>
+      </form>
+    </div>
+  </div>
+
   <script>
-    // Navigation Control between Sign In, Forgot Password, and Reset Password
+    let pendingUserSession = null;
+    let recoveryEmail = '';
+
     function switchView(viewId) {
       document.querySelectorAll('.view-step').forEach(el => el.classList.remove('active'));
       document.getElementById(viewId).classList.add('active');
       
-      // Clear alert messages during navigation
       document.querySelectorAll('.alert').forEach(a => {
         a.style.display = 'none';
         a.className = 'alert';
       });
     }
 
-    // 1. Session check on page load
-    document.addEventListener('DOMContentLoaded', async () => {
-      try {
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.user && data.user.role) {
-            redirectUserByRole(data.user.role);
-          }
-        }
-      } catch (err) {
-        // Guest user session; remain on login page
+    function handlePostLoginRedirect(role) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const redirectUrl = urlParams.get('redirect');
+
+      if (redirectUrl) {
+        window.location.href = decodeURIComponent(redirectUrl);
+        return;
       }
-    });
 
-    // 2. Sign In Form Handler
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const alertBox = document.getElementById('loginAlert');
-      alertBox.style.display = 'none';
-
-      const email = document.getElementById('email').value.trim();
-      const password = document.getElementById('password').value;
-
-      try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          redirectUserByRole(data.user.role);
-        } else {
-          showAlert(alertBox, data.error || 'Invalid email or password', 'danger');
-        }
-      } catch (err) {
-        showAlert(alertBox, 'Network connection error. Please try again.', 'danger');
-      }
-    });
-
-    // 3. Forgot Password Request Handler
-    document.getElementById('forgotForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const alertBox = document.getElementById('forgotAlert');
-      const email = document.getElementById('resetEmail').value.trim();
-
-      try {
-        const res = await fetch('/api/auth/forgot-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email })
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          showAlert(alertBox, data.message || 'Reset token generated. Proceeding to reset form...', 'success');
-          setTimeout(() => switchView('resetView'), 1800);
-        } else {
-          showAlert(alertBox, data.error || 'Unable to process reset request.', 'danger');
-        }
-      } catch (err) {
-        showAlert(alertBox, 'Network error. Please try again later.', 'danger');
-      }
-    });
-
-    // 4. Reset Password Submission Handler
-    document.getElementById('resetForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const alertBox = document.getElementById('resetAlert');
-      const token = document.getElementById('resetToken').value.trim();
-      const newPassword = document.getElementById('newPassword').value;
-
-      try {
-        const res = await fetch('/api/auth/reset-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, newPassword })
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          showAlert(alertBox, 'Password updated successfully! Redirecting to login...', 'success');
-          setTimeout(() => switchView('loginView'), 2000);
-        } else {
-          showAlert(alertBox, data.error || 'Invalid or expired reset token.', 'danger');
-        }
-      } catch (err) {
-        showAlert(alertBox, 'Network error. Password update failed.', 'danger');
-      }
-    });
-
-    // Centralized Alert Helper
-    function showAlert(element, message, type) {
-      element.innerText = message;
-      element.className = `alert alert-${type}`;
-      element.style.display = 'block';
+      redirectUserByRole(role);
     }
 
-    // Role-based Redirect Logic
     function redirectUserByRole(role) {
       switch (role) {
         case 'super_admin':
@@ -347,6 +351,304 @@
           window.location.href = '/requester-dashboard.html';
           break;
       }
+    }
+
+    function handlePostLoginFlow(data) {
+      pendingUserSession = data;
+      const user = data.user || {};
+
+      // 1. Direct Inline Account Initialization Block
+      if (data.requiresFirstTimeSetup || user.must_change_password === 1) {
+        document.getElementById('loginForm').style.display = 'none';
+        document.getElementById('setupContainer').style.display = 'block';
+        document.getElementById('setupUserId').value = data.userId || user.id;
+        return;
+      }
+
+      // 2. Forced Modal Verification Steps
+      const requiresPasswordReset = user.role !== 'super_admin' && Boolean(
+        data.mustChangePassword || 
+        user.must_change_password || 
+        data.must_change_password
+      );
+
+      const missingSecurityQuestions = 
+        data.securityQuestionsSet === false || 
+        user.securityQuestionsSet === false || 
+        data.requireSecuritySetup === true || 
+        user.has_security_questions === false;
+
+      if (requiresPasswordReset) {
+        document.getElementById('forcedPasswordModal').classList.add('active');
+      } else if (missingSecurityQuestions) {
+        document.getElementById('forcedSecurityModal').classList.add('active');
+      } else {
+        handlePostLoginRedirect(user.role);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const token = localStorage.getItem('token') || localStorage.getItem('jwt');
+        if (!token) return;
+
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const user = data.user || data;
+          if (user && user.role) {
+            handlePostLoginFlow(data);
+          }
+        }
+      } catch (err) {}
+    });
+
+    // Sign In Form Handler
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertBox = document.getElementById('loginAlert');
+      alertBox.style.display = 'none';
+
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          if (data.token) {
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('jwt', data.token);
+          }
+
+          handlePostLoginFlow(data);
+        } else {
+          showAlert(alertBox, data.error || data.message || 'Invalid email or password', 'danger');
+        }
+      } catch (err) {
+        showAlert(alertBox, 'Network connection error. Please try again.', 'danger');
+      }
+    });
+
+    // First-Time Setup Handler
+    document.getElementById('firstTimeSetupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('setupMessage');
+      msg.style.color = '#333';
+      msg.textContent = 'Saving setup...';
+
+      const payload = {
+        userId: document.getElementById('setupUserId').value,
+        new_password: document.getElementById('newPassword').value,
+        question_1: document.getElementById('setupNewQ1').value,
+        answer_1: document.getElementById('setupA1').value,
+        question_2: document.getElementById('setupNewQ2').value,
+        answer_2: document.getElementById('setupA2').value
+      };
+
+      const token = localStorage.getItem('token') || localStorage.getItem('jwt');
+
+      try {
+        const res = await fetch('/api/auth/first-time-setup', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` })
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          msg.style.color = 'green';
+          msg.textContent = 'Setup successful! Redirecting...';
+          setTimeout(() => {
+            const userRole = data.role || data.user?.role || pendingUserSession?.user?.role || 'requester';
+            handlePostLoginRedirect(userRole);
+          }, 1200);
+        } else {
+          msg.style.color = 'red';
+          msg.textContent = data.error || 'Setup failed.';
+        }
+      } catch (err) {
+        msg.style.color = 'red';
+        msg.textContent = 'Network or server error during setup.';
+      }
+    });
+
+    // Fetch Security Questions
+    document.getElementById('fetchQuestionsForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertBox = document.getElementById('forgotAlert');
+      recoveryEmail = document.getElementById('resetEmail').value.trim();
+
+      try {
+        const res = await fetch(`/api/auth/security-questions?email=${encodeURIComponent(recoveryEmail)}`);
+        const data = await res.json();
+
+        if (res.ok && (data.question_1 || data.question1) && (data.question_2 || data.question2)) {
+          document.getElementById('lblQ1').innerText = data.question_1 || data.question1;
+          document.getElementById('lblQ2').innerText = data.question_2 || data.question2;
+          switchView('securityQuestionsView');
+        } else {
+          showAlert(alertBox, data.error || data.message || 'Security questions have not been configured for this account.', 'danger');
+        }
+      } catch (err) {
+        showAlert(alertBox, 'Network error. Please try again later.', 'danger');
+      }
+    });
+
+    // Reset Password via Security Questions
+    document.getElementById('secResetForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertBox = document.getElementById('secAlert');
+      const answer1 = document.getElementById('ans1').value.trim();
+      const answer2 = document.getElementById('ans2').value.trim();
+      const newPassword = document.getElementById('secNewPassword').value;
+      const confirmPassword = document.getElementById('secConfirmPassword').value;
+
+      if (newPassword !== confirmPassword) {
+        showAlert(alertBox, 'Passwords do not match.', 'danger');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/reset-password-security', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: recoveryEmail, answer1, answer2, newPassword })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          showAlert(alertBox, 'Password successfully reset! Redirecting to login...', 'success');
+          setTimeout(() => {
+            document.getElementById('secResetForm').reset();
+            switchView('loginView');
+          }, 2000);
+        } else {
+          showAlert(alertBox, data.error || data.message || 'Failed to verify answers.', 'danger');
+        }
+      } catch (err) {
+        showAlert(alertBox, 'Network error during password reset.', 'danger');
+      }
+    });
+
+    // Forced Password Update Handler
+    document.getElementById('forcedPasswordForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertBox = document.getElementById('forcedAlert');
+      const newPassword = document.getElementById('forcedNewPassword').value;
+      const confirmPassword = document.getElementById('forcedConfirmPassword').value;
+
+      if (newPassword !== confirmPassword) {
+        showAlert(alertBox, 'Passwords do not match.', 'danger');
+        return;
+      }
+
+      const authToken = pendingUserSession?.token || localStorage.getItem('token');
+
+      try {
+        const res = await fetch('/api/auth/change-password', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}` 
+          },
+          body: JSON.stringify({ newPassword })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          showAlert(alertBox, 'Password updated successfully!', 'success');
+          document.getElementById('forcedPasswordModal').classList.remove('active');
+          
+          if (pendingUserSession) {
+            pendingUserSession.mustChangePassword = false;
+            if (pendingUserSession.user) pendingUserSession.user.must_change_password = false;
+          }
+
+          const user = pendingUserSession?.user || {};
+          const missingQuestions = 
+            pendingUserSession?.securityQuestionsSet === false || 
+            user.securityQuestionsSet === false || 
+            pendingUserSession?.requireSecuritySetup === true ||
+            user.has_security_questions === false;
+
+          if (missingQuestions) {
+            document.getElementById('forcedSecurityModal').classList.add('active');
+          } else {
+            setTimeout(() => {
+              handlePostLoginRedirect(user.role || 'requester');
+            }, 1000);
+          }
+        } else {
+          showAlert(alertBox, data.error || data.message || 'Failed to update password.', 'danger');
+        }
+      } catch (err) {
+        showAlert(alertBox, 'Network error during password update.', 'danger');
+      }
+    });
+
+    // Forced Security Setup Handler
+    document.getElementById('forcedSecurityForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertBox = document.getElementById('forcedSecAlert');
+      const question1 = document.getElementById('setupQ1').value;
+      const answer1 = document.getElementById('setupA1Modal').value.trim();
+      const question2 = document.getElementById('setupQ2').value;
+      const answer2 = document.getElementById('setupA2Modal').value.trim();
+
+      if (question1 === question2) {
+        showAlert(alertBox, 'Please select two different security questions.', 'danger');
+        return;
+      }
+
+      const authToken = pendingUserSession?.token || localStorage.getItem('token');
+
+      try {
+        const res = await fetch('/api/auth/setup-security-questions', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}` 
+          },
+          body: JSON.stringify({
+            question1, answer1, question2, answer2
+          })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          showAlert(alertBox, 'Security questions saved! Redirecting to dashboard...', 'success');
+          setTimeout(() => {
+            const userRole = pendingUserSession?.user?.role || 'requester';
+            handlePostLoginRedirect(userRole);
+          }, 1500);
+        } else {
+          showAlert(alertBox, data.error || data.message || 'Failed to save security questions.', 'danger');
+        }
+      } catch (err) {
+        showAlert(alertBox, 'Network error. Please try again.', 'danger');
+      }
+    });
+
+    function showAlert(element, message, type) {
+      element.innerText = message;
+      element.className = `alert alert-${type}`;
+      element.style.display = 'block';
     }
   </script>
 </body>
