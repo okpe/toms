@@ -22,12 +22,13 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Enable proxy trusting for secure cookies on Vercel
+app.set('trust proxy', 1);
+
 // Helper function to sanitize CSV fields against Formula Injection
 const sanitizeCsvField = (val) => {
   let str = (val || '').toString();
-  // Escape double quotes
   str = str.replace(/"/g, '""');
-  // Prevent CSV formula execution in Excel/Sheets
   if (/^[=+\-@\t\r]/.test(str)) {
     str = `'` + str;
   }
@@ -44,16 +45,65 @@ app.use(cors({
   credentials: true
 }));
 
-// Session Middleware Configuration
+// ================= TURSO SESSION STORE =================
+class TursoSessionStore extends session.Store {
+  constructor(database) {
+    super();
+    this.db = database;
+  }
+
+  async get(sid, callback) {
+    try {
+      const row = await this.db.getAsync(
+        `SELECT sess FROM sessions WHERE sid = ? AND datetime(expired) > datetime('now')`,
+        [sid]
+      );
+      if (!row) return callback(null, null);
+      const sessionData = JSON.parse(row.sess);
+      callback(null, sessionData);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  async set(sid, sessionData, callback) {
+    try {
+      const maxAge = sessionData.cookie?.maxAge || 86400000;
+      const expired = new Date(Date.now() + maxAge).toISOString();
+      const sessStr = JSON.stringify(sessionData);
+
+      await this.db.runAsync(
+        `INSERT INTO sessions (sid, sess, expired) VALUES (?, ?, ?)
+         ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expired = excluded.expired`,
+        [sid, sessStr, expired]
+      );
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  async destroy(sid, callback) {
+    try {
+      await this.db.runAsync(`DELETE FROM sessions WHERE sid = ?`, [sid]);
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+}
+
+// Session Middleware Configuration with Turso Store
 app.use(
   session({
+    store: new TursoSessionStore(db),
     name: 'connect.sid',
     secret: process.env.SESSION_SECRET || 'fallback-secret-key-change-in-env',
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'production' || !!process.env.VERCEL,
       sameSite: 'lax',
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
@@ -71,9 +121,8 @@ app.get('/', (req, res) => {
   res.redirect('/login.html');
 });
 
-// ================= SECURED DIAGNOSTIC / ADMIN ENDPOINTS =================
+// ================= SECURED DIAGNOSTIC ENDPOINTS =================
 
-// Secured session nuke (Requires active login)
 app.get('/api/nuke-session', requireAuth, (req, res) => {
   if (req.session) {
     req.session.destroy(() => {
@@ -82,29 +131,6 @@ app.get('/api/nuke-session', requireAuth, (req, res) => {
     });
   } else {
     res.send('<h1>No active session.</h1><p><a href="/login.html">Click here to log in</a></p>');
-  }
-});
-
-// Strictly protected behind Super Admin access
-app.get('/api/fix-my-role', requireAuth, requireAdminOrSuper, async (req, res) => {
-  const sessionRole = String(req.session.user.role || '').toLowerCase();
-  if (sessionRole !== 'super_admin') {
-    return res.status(403).send('Only active Super Admins can invoke emergency role repair.');
-  }
-
-  try {
-    await db.runAsync("UPDATE users SET role = 'super_admin', access_helpdesk = 1, access_assets = 1 WHERE email = 'superadmin@helpdesk.local'");
-    
-    if (req.session) {
-      req.session.destroy(() => {
-        res.clearCookie('connect.sid');
-        res.send('<h1>Successfully updated superadmin@helpdesk.local to super_admin!</h1><p><a href="/login.html">Click here to log in again</a></p>');
-      });
-    } else {
-      res.send('<h1>Successfully updated superadmin@helpdesk.local to super_admin!</h1><p><a href="/login.html">Click here to log in again</a></p>');
-    }
-  } catch (err) {
-    res.status(500).send('Error updating role: ' + err.message);
   }
 });
 
@@ -180,7 +206,7 @@ app.post('/api/auth/login', loginHandler);
 // First-Time Setup Route
 app.post('/api/auth/first-time-setup', async (req, res) => {
   try {
-    const userId = req.session?.userId || req.session?.user?.id || req.body.userId;
+    const userId = req.body.userId || req.body.id || req.session?.userId || req.session?.user?.id;
     if (!userId) {
       return res.status(401).json({ error: 'Session expired or invalid user ID.' });
     }
@@ -204,6 +230,7 @@ app.post('/api/auth/first-time-setup', async (req, res) => {
       req.session.user.securityQuestionsSet = true;
       req.session.user.requireSecuritySetup = false;
       req.session.user.has_security_questions = true;
+      req.session.save(() => {});
     }
 
     res.json({ success: true, message: 'Account setup completed successfully!' });
@@ -215,7 +242,6 @@ app.post('/api/auth/first-time-setup', async (req, res) => {
 
 // ================= SECURITY QUESTION & RECOVERY ENDPOINTS =================
 
-// Fetch Security Questions by Email Query (GET /api/auth/security-questions?email=...)
 app.get('/api/auth/security-questions', async (req, res) => {
   try {
     const { email } = req.query;
@@ -223,13 +249,13 @@ app.get('/api/auth/security-questions', async (req, res) => {
 
     const user = await db.findUserByEmail(email.trim());
     if (!user) {
-      return res.status(404).json({ error: 'No account found with that email address. Please double-check your entry.' });
+      return res.status(404).json({ error: 'No account found with that email address.' });
     }
 
     const sq = await db.getAsync('SELECT question_1, question_2 FROM user_security_questions WHERE user_id = ?', [user.id]);
     if (!sq) {
       return res.status(422).json({ 
-        error: 'Security questions have not been configured for this account. Please contact your System Administrator to receive a temporary password.' 
+        error: 'Security questions have not been configured for this account. Please contact your System Administrator.' 
       });
     }
 
@@ -241,11 +267,10 @@ app.get('/api/auth/security-questions', async (req, res) => {
     });
   } catch (err) {
     console.error('[!] Get security questions query error:', err);
-    return res.status(500).json({ error: 'An unexpected system error occurred. Please try again later.' });
+    return res.status(500).json({ error: 'An unexpected system error occurred.' });
   }
 });
 
-// Fetch Security Questions by Email Body (POST /api/auth/get-security-questions)
 app.post('/api/auth/get-security-questions', async (req, res) => {
   try {
     const { email } = req.body;
@@ -257,7 +282,7 @@ app.post('/api/auth/get-security-questions', async (req, res) => {
     const sq = await db.getAsync('SELECT question_1, question_2 FROM user_security_questions WHERE user_id = ?', [user.id]);
     if (!sq) {
       return res.status(422).json({ 
-        error: 'Security questions have not been configured for this account. Please contact your System Administrator to receive a temporary password.' 
+        error: 'Security questions have not been configured for this account.' 
       });
     }
 
@@ -273,7 +298,6 @@ app.post('/api/auth/get-security-questions', async (req, res) => {
   }
 });
 
-// Setup Security Questions Handler
 const setupSecurityQuestionsHandler = async (req, res) => {
   try {
     const userId = req.session?.user?.id;
@@ -286,7 +310,6 @@ const setupSecurityQuestionsHandler = async (req, res) => {
     let q2 = req.body.question2;
     let a2 = req.body.answer2;
 
-    // Support array payload structure as fallback
     if (Array.isArray(req.body.questions) && req.body.questions.length >= 2) {
       q1 = q1 || req.body.questions[0].question;
       a1 = a1 || req.body.questions[0].answer;
@@ -301,7 +324,6 @@ const setupSecurityQuestionsHandler = async (req, res) => {
     const answer1Hash = await bcrypt.hash(a1.trim().toLowerCase(), 10);
     const answer2Hash = await bcrypt.hash(a2.trim().toLowerCase(), 10);
 
-    // Update questions and user flag inside transaction
     await db.runAsync('DELETE FROM user_security_questions WHERE user_id = ?', [userId]);
     await db.runAsync(
       `INSERT INTO user_security_questions (user_id, question_1, answer_1_hash, question_2, answer_2_hash) VALUES (?, ?, ?, ?, ?)`,
@@ -326,7 +348,6 @@ const setupSecurityQuestionsHandler = async (req, res) => {
 
 app.post('/api/auth/setup-security-questions', requireAuth, setupSecurityQuestionsHandler);
 
-// Security Verification & Password Reset Handler
 const verifyAndResetPasswordHandler = async (req, res) => {
   try {
     const { email, answer1, answer2, newPassword } = req.body;
@@ -360,34 +381,7 @@ const verifyAndResetPasswordHandler = async (req, res) => {
 
 app.post('/api/auth/reset-password-security', verifyAndResetPasswordHandler);
 app.post('/api/auth/verify-and-reset', verifyAndResetPasswordHandler);
-
-// Direct Password Reset Request Endpoint
-app.post('/api/auth/request-password-reset', async (req, res) => {
-  const { email, desiredPassword } = req.body;
-
-  if (!email || !desiredPassword || desiredPassword.length < 8) {
-    return res.status(400).json({ error: 'Valid email and desired password (min 8 characters) are required.' });
-  }
-
-  try {
-    const user = await db.findUserByEmail(email.trim());
-    if (!user) {
-      return res.status(404).json({ error: 'No account associated with that email address.' });
-    }
-
-    const hashedPassword = await bcrypt.hash(desiredPassword, 10);
-    
-    await db.runAsync(
-      `UPDATE users SET password = ?, must_change_password = 0 WHERE id = ?`,
-      [hashedPassword, user.id]
-    );
-
-    res.json({ message: 'Password reset successfully. You can now sign in with your new password.' });
-  } catch (err) {
-    console.error('[!] Password reset request error:', err);
-    res.status(500).json({ error: 'Failed to process password reset request.' });
-  }
-});
+app.post('/api/auth/request-password-reset', verifyAndResetPasswordHandler);
 
 // Authenticated Password Update Endpoint
 app.post('/api/auth/change-password', requireAuth, async (req, res) => {
@@ -741,7 +735,6 @@ app.post('/api/tickets', requireAuth, requireHelpdeskAccess, async (req, res) =>
   if (selectedType.includes('Service Request')) selectedType = 'Service Request';
   if (selectedType.includes('Change Request')) selectedType = 'Change Request';
 
-  // FIX: Validated status values ('Open' for standard users, 'Approved' for management/resolvers)
   let initialStatus = 'Open';
   if (['manager', 'admin', 'super_admin', 'superadmin', 'resolver'].includes(userRole)) {
     initialStatus = 'Approved';
@@ -1362,36 +1355,29 @@ app.get('/api/admin/reports/export', requireAuth, requireAdminOrSuper, async (re
 
 // ================= SCHEDULED CRON JOBS =================
 
-cron.schedule('0 * * * *', async () => {
-  console.log('[CRON] Running scheduled check for overdue SLA targets...');
-  try {
-    const nowIso = new Date().toISOString();
-    const result = await db.runAsync(
-      `UPDATE tickets 
-       SET sla_resolution_status = 'Breached', updated_at = CURRENT_TIMESTAMP
-       WHERE status IN ('Open', 'Approved', 'In Progress') 
-         AND sla_target_resolution IS NOT NULL 
-         AND datetime(sla_target_resolution) < datetime(?) 
-         AND sla_resolution_status = 'Pending'`,
-      [nowIso]
-    );
-
-    if (result.changes > 0) {
-      console.log(`[CRON] Flagged ${result.changes} overdue tickets as SLA Breached.`);
-    }
-  } catch (err) {
-    console.error('[CRON] Error checking SLA breaches:', err);
-  }
-});
-/*
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server started successfully on port ${PORT}`);
-});*/
-
-// Only start the server locally if not running as a Vercel serverless function
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  const PORT = process.env.PORT || 3000;
+  cron.schedule('0 * * * *', async () => {
+    console.log('[CRON] Running scheduled check for overdue SLA targets...');
+    try {
+      const nowIso = new Date().toISOString();
+      const result = await db.runAsync(
+        `UPDATE tickets 
+         SET sla_resolution_status = 'Breached', updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('Open', 'Approved', 'In Progress') 
+           AND sla_target_resolution IS NOT NULL 
+           AND datetime(sla_target_resolution) < datetime(?) 
+           AND sla_resolution_status = 'Pending'`,
+        [nowIso]
+      );
+
+      if (result.changes > 0) {
+        console.log(`[CRON] Flagged ${result.changes} overdue tickets as SLA Breached.`);
+      }
+    } catch (err) {
+      console.error('[CRON] Error checking SLA breaches:', err);
+    }
+  });
+
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
