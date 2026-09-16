@@ -69,7 +69,8 @@
     .btn-success-custom { background: #28a745; color: #fff; }
     .btn-success-custom:hover:not(:disabled) { background: #218838; }
     .btn-edit { background: #e0e0e0; color: #333; padding: 5px 10px; font-size: 0.8rem; border-radius: 4px; border: none; cursor: pointer; }
-    .btn-edit:hover { background: #d0d0d0; }
+    .btn-edit:hover:not(:disabled) { background: #d0d0d0; }
+    .btn-edit:disabled { opacity: 0.5; cursor: not-allowed; background: #e0e0e0 !important; color: #888 !important; }
 
     /* Tables */
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
@@ -713,7 +714,7 @@
           <td>${user.manager_name ? escapeHtml(user.manager_name) : '-'}</td>
           <td>
             ${user.role === 'super_admin' 
-              ? '<span style="color: #6c757d; font-size: 0.8rem; font-weight: 600;">System Locked</span>' 
+              ? `<button class="btn-edit" disabled title="Super Admin account cannot be edited">Edit</button>` 
               : `<button class="btn-edit" onclick="openEditModal(${user.id})">Edit</button>`
             }
           </td>
@@ -763,6 +764,11 @@
       hideModalAlert();
       const user = rawUsersList.find(u => u.id === userId);
       if (!user) return;
+
+      if (user.role === 'super_admin') {
+        showPageAlert('Super Admin account cannot be edited.', 'danger');
+        return;
+      }
 
       await fetchManagers();
 

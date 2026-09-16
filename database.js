@@ -184,13 +184,15 @@ async function initSchema() {
       )
     `);
 
-    // Performance Indexes
+    // 8. Performance Indexes
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)`);
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_requester ON tickets(requester_id)`);
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_to)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at)`);
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status)`);
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_assets_assigned ON assets(assigned_to)`);
     await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_security_questions_user ON user_security_questions(user_id)`);
+    await db.runAsync(`CREATE INDEX IF NOT EXISTS idx_sessions_expired ON sessions(expired)`);
 
     // Safe Column Migrations
     const safeAddColumn = async (table, column, typeDef) => {

@@ -312,6 +312,10 @@
     let pendingUserSession = null;
     let recoveryEmail = '';
 
+    function getAuthToken() {
+      return localStorage.getItem('token') || localStorage.getItem('jwt') || (pendingUserSession && pendingUserSession.token);
+    }
+
     function switchView(viewId) {
       document.querySelectorAll('.view-step').forEach(el => el.classList.remove('active'));
       document.getElementById(viewId).classList.add('active');
@@ -389,10 +393,12 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
-        const token = localStorage.getItem('token') || localStorage.getItem('jwt');
+        const token = getAuthToken();
         if (!token) return;
 
         const res = await fetch('/api/auth/me', {
+          method: 'GET',
+          credentials: 'include',
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -418,6 +424,7 @@
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password })
         });
@@ -455,11 +462,12 @@
         answer_2: document.getElementById('setupA2').value
       };
 
-      const token = localStorage.getItem('token') || localStorage.getItem('jwt');
+      const token = getAuthToken();
 
       try {
         const res = await fetch('/api/auth/first-time-setup', {
           method: 'POST',
+          credentials: 'include',
           headers: { 
             'Content-Type': 'application/json',
             ...(token && { 'Authorization': `Bearer ${token}` })
@@ -492,7 +500,9 @@
       recoveryEmail = document.getElementById('resetEmail').value.trim();
 
       try {
-        const res = await fetch(`/api/auth/security-questions?email=${encodeURIComponent(recoveryEmail)}`);
+        const res = await fetch(`/api/auth/security-questions?email=${encodeURIComponent(recoveryEmail)}`, {
+          credentials: 'include'
+        });
         const data = await res.json();
 
         if (res.ok && (data.question_1 || data.question1) && (data.question_2 || data.question2)) {
@@ -524,6 +534,7 @@
       try {
         const res = await fetch('/api/auth/reset-password-security', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: recoveryEmail, answer1, answer2, newPassword })
         });
@@ -556,17 +567,32 @@
         return;
       }
 
-      const authToken = pendingUserSession?.token || localStorage.getItem('token');
+      const authToken = getAuthToken();
 
       try {
-        const res = await fetch('/api/auth/change-password', {
+        // Primary endpoint call
+        let res = await fetch('/api/auth/change-password', {
           method: 'POST',
+          credentials: 'include',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}` 
+            ...(authToken && { 'Authorization': `Bearer ${authToken}` })
           },
           body: JSON.stringify({ newPassword })
         });
+
+        // Endpoint fallback check if routing matches /update-password
+        if (res.status === 404) {
+          res = await fetch('/api/auth/update-password', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 
+              'Content-Type': 'application/json',
+              ...(authToken && { 'Authorization': `Bearer ${authToken}` })
+            },
+            body: JSON.stringify({ newPassword })
+          });
+        }
 
         const data = await res.json();
 
@@ -615,14 +641,15 @@
         return;
       }
 
-      const authToken = pendingUserSession?.token || localStorage.getItem('token');
+      const authToken = getAuthToken();
 
       try {
         const res = await fetch('/api/auth/setup-security-questions', {
           method: 'POST',
+          credentials: 'include',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}` 
+            ...(authToken && { 'Authorization': `Bearer ${authToken}` })
           },
           body: JSON.stringify({
             question1, answer1, question2, answer2

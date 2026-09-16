@@ -29,7 +29,8 @@ app.set('trust proxy', 1);
 const sanitizeCsvField = (val) => {
   let str = (val || '').toString();
   str = str.replace(/"/g, '""');
-  if (/^[=+\-@\t\r]/.test(str)) {
+  // Strip or escape formula trigger characters even if preceded by whitespace
+  if (/^\s*[=+\-@\t\r]/.test(str)) {
     str = `'` + str;
   }
   return `"${str}"`;
@@ -91,12 +92,34 @@ class TursoSessionStore extends session.Store {
       callback(err);
     }
   }
+
+  // Automatic Session Cleanup Method
+  async clearExpiredSessions(callback) {
+    try {
+      await this.db.runAsync(
+        `DELETE FROM sessions WHERE datetime(expired) <= datetime('now')`
+      );
+      if (callback) callback(null);
+    } catch (err) {
+      if (callback) callback(err);
+    }
+  }
 }
+
+// Instantiate Turso Store and start automatic cleanup interval
+const sessionStore = new TursoSessionStore(db);
+
+// Purge expired session records from the database every hour
+setInterval(() => {
+  sessionStore.clearExpiredSessions((err) => {
+    if (err) console.error('[!] Failed to clear expired sessions:', err);
+  });
+}, 60 * 60 * 1000);
 
 // Session Middleware Configuration with Turso Store
 app.use(
   session({
-    store: new TursoSessionStore(db),
+    store: sessionStore,
     name: 'connect.sid',
     secret: process.env.SESSION_SECRET || 'fallback-secret-key-change-in-env',
     resave: false,
@@ -230,7 +253,15 @@ app.post('/api/auth/first-time-setup', async (req, res) => {
       req.session.user.securityQuestionsSet = true;
       req.session.user.requireSecuritySetup = false;
       req.session.user.has_security_questions = true;
-      req.session.save(() => {});
+
+      // Await session persistence before sending response to fix callback race condition
+      return req.session.save((err) => {
+        if (err) {
+          console.error('[!] Session save error during first-time setup:', err);
+          return res.status(500).json({ error: 'Failed to update user session.' });
+        }
+        return res.json({ success: true, message: 'Account setup completed successfully!' });
+      });
     }
 
     res.json({ success: true, message: 'Account setup completed successfully!' });
@@ -1353,7 +1384,37 @@ app.get('/api/admin/reports/export', requireAuth, requireAdminOrSuper, async (re
   }
 });
 
-// ================= SCHEDULED CRON JOBS =================
+// ================= SCHEDULED CRON JOBS & VERCEL ENDPOINTS =================
+
+// Vercel-Friendly Cron Endpoint for SLA Checks
+app.get('/api/cron/check-sla', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized cron request.' });
+  }
+
+  try {
+    const nowIso = new Date().toISOString();
+    const result = await db.runAsync(
+      `UPDATE tickets 
+       SET sla_resolution_status = 'Breached', updated_at = CURRENT_TIMESTAMP
+       WHERE status IN ('Open', 'Approved', 'In Progress') 
+         AND sla_target_resolution IS NOT NULL 
+         AND datetime(sla_target_resolution) < datetime(?) 
+         AND sla_resolution_status = 'Pending'`,
+      [nowIso]
+    );
+
+    return res.json({
+      success: true,
+      message: 'SLA check triggered successfully.',
+      breachedCount: result.changes || 0
+    });
+  } catch (err) {
+    console.error('[CRON Endpoint] Error running SLA check:', err);
+    return res.status(500).json({ error: 'Failed to execute SLA update job.' });
+  }
+});
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   cron.schedule('0 * * * *', async () => {
